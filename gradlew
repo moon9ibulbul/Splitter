@@ -43,22 +43,42 @@ download_wrapper_from_distribution() {
     return 1
   fi
 
-  if ! command -v unzip >/dev/null 2>&1; then
+  jar_path=$(TMP_DIR="$tmp_dir" ZIP_PATH="$zip_path" python - <<'PY'
+import os, re, sys, zipfile, shutil
+
+tmp_dir = os.environ["TMP_DIR"]
+zip_path = os.environ["ZIP_PATH"]
+
+patterns = [
+    re.compile(r"gradle-[^/]+/lib/plugins/gradle-wrapper-.*\.jar"),
+    re.compile(r"gradle-[^/]+/lib/gradle-wrapper-.*\.jar"),
+]
+
+try:
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        for pattern in patterns:
+            for name in names:
+                if pattern.fullmatch(name):
+                    target = os.path.join(tmp_dir, os.path.basename(name))
+                    with zf.open(name) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    print(target)
+                    raise SystemExit(0)
+except Exception:
+    pass
+
+print("")
+raise SystemExit(1)
+PY
+  )
+
+  if [ -n "$jar_path" ] && [ -f "$jar_path" ]; then
+    mkdir -p "$(dirname "$WRAPPER_JAR")"
+    mv "$jar_path" "$WRAPPER_JAR"
     cleanup_tmp_dir
-    return 1
+    return 0
   fi
-
-  for pattern in "gradle-*/lib/plugins/gradle-wrapper-*.jar" "gradle-*/lib/gradle-wrapper-*.jar"; do
-    unzip -j "$zip_path" "$pattern" -d "$tmp_dir" >/dev/null 2>&1 || continue
-
-    jar_path=$(printf "%s\n" "$tmp_dir"/gradle-wrapper-*.jar | head -n 1)
-    if [ -f "$jar_path" ]; then
-      mkdir -p "$(dirname "$WRAPPER_JAR")"
-      mv "$jar_path" "$WRAPPER_JAR"
-      cleanup_tmp_dir
-      return 0
-    fi
-  done
 
   cleanup_tmp_dir
   return 1
