@@ -2,27 +2,58 @@
 
 ##############################################################################
 ## Download gradle-wrapper.jar on demand to avoid committing binaries.     ##
+## If the JAR is missing, we pull it from the configured distribution ZIP  ##
+## instead of Maven Central (which can serve 404s for this artifact).      ##
 ##############################################################################
 
 APP_HOME=$(cd "$(dirname "$0")" && pwd -P)
 WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
-WRAPPER_URL="https://repo.maven.apache.org/maven2/org/gradle/gradle-wrapper/8.9/gradle-wrapper-8.9.jar"
+PROPERTIES_FILE="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
+
+distributionUrl=""
+if [ -f "$PROPERTIES_FILE" ]; then
+  distributionUrl=$(sed -n 's/^distributionUrl=//p' "$PROPERTIES_FILE" | tail -n 1 | sed 's#\\:#:#g')
+fi
+
+download_wrapper_from_distribution() {
+  tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t gradle-wrapper)
+  [ -d "$tmp_dir" ] || return 1
+
+  cleanup_tmp_dir() {
+    rm -rf "$tmp_dir"
+  }
+
+  zip_path="$tmp_dir/gradle-dist.zip"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL "$distributionUrl" -o "$zip_path" || { cleanup_tmp_dir; return 1; }
+  elif command -v wget >/dev/null 2>&1; then
+    wget "$distributionUrl" -O "$zip_path" || { cleanup_tmp_dir; return 1; }
+  else
+    cleanup_tmp_dir
+    return 1
+  fi
+
+  if ! command -v unzip >/dev/null 2>&1; then
+    cleanup_tmp_dir
+    return 1
+  fi
+
+  unzip -j "$zip_path" "gradle-*/lib/gradle-wrapper-*.jar" -d "$tmp_dir" >/dev/null 2>&1 || { cleanup_tmp_dir; return 1; }
+
+  jar_path=$(printf "%s\n" "$tmp_dir"/gradle-wrapper-*.jar | head -n 1)
+  [ -f "$jar_path" ] || { cleanup_tmp_dir; return 1; }
+
+  mkdir -p "$(dirname "$WRAPPER_JAR")"
+  mv "$jar_path" "$WRAPPER_JAR"
+  cleanup_tmp_dir
+  return 0
+}
 
 if [ ! -f "$WRAPPER_JAR" ]; then
-  echo "gradle-wrapper.jar missing, downloading..." >&2
-  mkdir -p "$(dirname "$WRAPPER_JAR")"
-  if command -v curl >/dev/null 2>&1; then
-    curl -fL "$WRAPPER_URL" -o "$WRAPPER_JAR" || {
-      echo "Failed to download gradle-wrapper.jar" >&2
-      exit 1
-    }
-  elif command -v wget >/dev/null 2>&1; then
-    wget "$WRAPPER_URL" -O "$WRAPPER_JAR" || {
-      echo "Failed to download gradle-wrapper.jar" >&2
-      exit 1
-    }
-  else
-    echo "Neither curl nor wget is available to download gradle-wrapper.jar" >&2
+  echo "gradle-wrapper.jar missing, extracting from distribution..." >&2
+  if [ -z "$distributionUrl" ] || ! download_wrapper_from_distribution; then
+    echo "Failed to provision gradle-wrapper.jar; check network access to the Gradle distribution." >&2
     exit 1
   fi
 fi
