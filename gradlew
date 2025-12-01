@@ -39,15 +39,20 @@ download_wrapper_from_distribution() {
     return 1
   fi
 
-  unzip -j "$zip_path" "gradle-*/lib/gradle-wrapper-*.jar" -d "$tmp_dir" >/dev/null 2>&1 || { cleanup_tmp_dir; return 1; }
+  for pattern in "gradle-*/lib/plugins/gradle-wrapper-*.jar" "gradle-*/lib/gradle-wrapper-*.jar"; do
+    unzip -j "$zip_path" "$pattern" -d "$tmp_dir" >/dev/null 2>&1 || continue
 
-  jar_path=$(printf "%s\n" "$tmp_dir"/gradle-wrapper-*.jar | head -n 1)
-  [ -f "$jar_path" ] || { cleanup_tmp_dir; return 1; }
+    jar_path=$(printf "%s\n" "$tmp_dir"/gradle-wrapper-*.jar | head -n 1)
+    if [ -f "$jar_path" ]; then
+      mkdir -p "$(dirname "$WRAPPER_JAR")"
+      mv "$jar_path" "$WRAPPER_JAR"
+      cleanup_tmp_dir
+      return 0
+    fi
+  done
 
-  mkdir -p "$(dirname "$WRAPPER_JAR")"
-  mv "$jar_path" "$WRAPPER_JAR"
   cleanup_tmp_dir
-  return 0
+  return 1
 }
 
 if [ ! -f "$WRAPPER_JAR" ]; then
