@@ -16,6 +16,29 @@ if [ -f "$PROPERTIES_FILE" ]; then
   distributionUrl=$(sed -n 's/^distributionUrl=//p' "$PROPERTIES_FILE" | tail -n 1 | sed 's#\\:#:#g')
 fi
 
+wrapper_valid() {
+  [ -f "$WRAPPER_JAR" ] || return 1
+  if command -v jar >/dev/null 2>&1; then
+    jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/IDownload.class" || return 1
+    jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/GradleWrapperMain.class" || return 1
+  fi
+  return 0
+}
+
+restore_wrapper_from_base64() {
+  command -v base64 >/dev/null 2>&1 || return 1
+  [ -f "$WRAPPER_JAR_B64" ] || return 1
+
+  mkdir -p "$(dirname "$WRAPPER_JAR")"
+  if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null && wrapper_valid; then
+    echo "gradle-wrapper.jar restored from base64." >&2
+    return 0
+  fi
+
+  rm -f "$WRAPPER_JAR"
+  return 1
+}
+
 download_wrapper_from_distribution() {
   tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t gradle-wrapper)
   [ -d "$tmp_dir" ] || return 1
@@ -35,39 +58,77 @@ download_wrapper_from_distribution() {
     return 1
   fi
 
-  if ! command -v unzip >/dev/null 2>&1; then
+  jar_path=$(TMP_DIR="$tmp_dir" ZIP_PATH="$zip_path" python - <<'PY'
+import os, re, sys, zipfile, shutil
+
+tmp_dir = os.environ["TMP_DIR"]
+zip_path = os.environ["ZIP_PATH"]
+
+patterns = [
+    re.compile(r"gradle-[^/]+/lib/plugins/gradle-wrapper-.*\.jar"),
+    re.compile(r"gradle-[^/]+/lib/gradle-wrapper-.*\.jar"),
+]
+
+try:
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+        for pattern in patterns:
+            for name in names:
+                if pattern.fullmatch(name):
+                    target = os.path.join(tmp_dir, os.path.basename(name))
+                    with zf.open(name) as src, open(target, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    print(target)
+                    raise SystemExit(0)
+except Exception:
+    pass
+
+print("")
+raise SystemExit(1)
+PY
+  )
+
+  if [ -n "$jar_path" ] && [ -f "$jar_path" ]; then
+    mkdir -p "$(dirname "$WRAPPER_JAR")"
+    mv "$jar_path" "$WRAPPER_JAR"
     cleanup_tmp_dir
-    return 1
+    return 0
   fi
 
-  unzip -j "$zip_path" "gradle-*/lib/gradle-wrapper-*.jar" -d "$tmp_dir" >/dev/null 2>&1 || { cleanup_tmp_dir; return 1; }
-
-  jar_path=$(printf "%s\n" "$tmp_dir"/gradle-wrapper-*.jar | head -n 1)
-  [ -f "$jar_path" ] || { cleanup_tmp_dir; return 1; }
-
-  mkdir -p "$(dirname "$WRAPPER_JAR")"
-  mv "$jar_path" "$WRAPPER_JAR"
   cleanup_tmp_dir
+  return 1
+}
+
+generate_wrapper_with_gradle() {
+  gradle_cmd=$(command -v gradle || true)
+  [ -n "$gradle_cmd" ] || return 1
+
+  wrapper_version="$1"
+  if [ -z "$wrapper_version" ]; then
+    wrapper_version="$(printf "%s" "$distributionUrl" | sed -n 's#.*gradle-\([0-9][^-/]*\).*#\1#p' | head -n 1)"
+  fi
+
+  if [ -z "$wrapper_version" ]; then
+    "$gradle_cmd" wrapper >/dev/null 2>&1 || return 1
+  else
+    "$gradle_cmd" wrapper --gradle-version "$wrapper_version" >/dev/null 2>&1 || return 1
+  fi
+
+  [ -f "$WRAPPER_JAR" ] || return 1
   return 0
 }
 
-if [ ! -f "$WRAPPER_JAR" ]; then
-  echo "gradle-wrapper.jar missing, restoring from base64 payload..." >&2
-  if command -v base64 >/dev/null 2>&1 && [ -f "$WRAPPER_JAR_B64" ]; then
-    if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null; then
-      echo "gradle-wrapper.jar restored from base64." >&2
-    else
-      echo "Failed to decode gradle-wrapper.jar from base64; trying distribution download." >&2
-      rm -f "$WRAPPER_JAR"
-    fi
-  fi
-
-  if [ ! -f "$WRAPPER_JAR" ]; then
-    echo "Extracting gradle-wrapper.jar from distribution..." >&2
-    if [ -z "$distributionUrl" ] || ! download_wrapper_from_distribution; then
-      echo "Failed to provision gradle-wrapper.jar; check network access to the Gradle distribution." >&2
-      exit 1
-    fi
+if ! wrapper_valid; then
+  echo "gradle-wrapper.jar missing, attempting offline restore..." >&2
+  if restore_wrapper_from_base64; then
+    :
+  elif [ -n "$distributionUrl" ] && download_wrapper_from_distribution && wrapper_valid; then
+    :
+  elif generate_wrapper_with_gradle; then
+    :
+  else
+    echo "Failed to provision gradle-wrapper.jar; ensure network access to the Gradle distribution or a local Gradle installation." >&2
+    exit 1
   fi
 fi
 
@@ -95,12 +156,6 @@ fi
 
 CLASSPATH=$WRAPPER_JAR
 
-save () {
-    for i do printf %s\\n "$i" | sed "s/'/'\\''/g;1s/^/'/;\$s/\$/' \\/" ; done
-    echo ""
-}
-APP_ARGS=$(save "$@")
-
-eval set -- $DEFAULT_JVM_OPTS -Dorg.gradle.appname=$APP_NAME -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
+set -- $DEFAULT_JVM_OPTS -Dorg.gradle.appname="$APP_NAME" -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
 
 exec "$JAVACMD" "$@"
