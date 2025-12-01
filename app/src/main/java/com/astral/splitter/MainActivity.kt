@@ -3,7 +3,8 @@ package com.astral.splitter
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color as AndroidColor
 import android.graphics.ImageDecoder
 import android.net.Uri
 import android.os.Build
@@ -18,7 +19,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -51,7 +54,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -62,16 +64,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.astral.splitter.ui.theme.AstralSplitterTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,6 +77,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,13 +97,16 @@ enum class OutputFormat(val mimeType: String, val extension: String, val compres
     JPEG("image/jpeg", "jpg", Bitmap.CompressFormat.JPEG)
 }
 
-data class ImageMetadata(val uri: Uri, val width: Int, val height: Int)
+data class ImageMetadata(val uris: List<Uri>, val width: Int, val height: Int)
 
 data class PreviewState(
     val metadata: ImageMetadata,
     val cutPositions: List<Float>,
-    val outputFormat: OutputFormat
+    val outputFormat: OutputFormat,
+    val bitmap: Bitmap
 )
+
+data class StitchedSelection(val bitmap: Bitmap, val uris: List<Uri>)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,21 +114,31 @@ fun AstralSplitterApp() {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var metadata by remember { mutableStateOf<ImageMetadata?>(null) }
+    var stitchedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var splitMode by remember { mutableStateOf(SplitMode.ByHeight) }
     var splitValue by remember { mutableStateOf("") }
     var previewState by remember { mutableStateOf<PreviewState?>(null) }
     var outputFormat by remember { mutableStateOf(OutputFormat.PNG) }
+    var isLoadingImages by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     val pickImageLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            val size = loadImageDimensions(context, uri)
-            if (size != null) {
-                metadata = ImageMetadata(uri, size.first, size.second)
-            } else {
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isNullOrEmpty()) return@rememberLauncherForActivityResult
+        isLoadingImages = true
+        coroutineScope.launch {
+            val stitched = withContext(Dispatchers.IO) {
+                runCatching { stitchSelectedImages(context, uris) }
+            }
+            isLoadingImages = false
+            stitched.onSuccess { selection ->
+                stitchedBitmap = selection.bitmap
+                metadata = ImageMetadata(selection.uris, selection.bitmap.width, selection.bitmap.height)
+            }.onFailure {
+                stitchedBitmap = null
                 metadata = null
-                showToast(context, "Gagal membaca ukuran gambar")
+                showToast(context, it.message ?: "Gagal memuat gambar")
             }
         }
     }
@@ -142,6 +154,8 @@ fun AstralSplitterApp() {
                 metadata = metadata,
                 splitMode = splitMode,
                 splitValue = splitValue,
+                isLoadingImage = isLoadingImages,
+                previewBitmap = stitchedBitmap,
                 onSplitModeChange = { splitMode = it },
                 onSplitValueChange = { splitValue = it },
                 outputFormat = outputFormat,
@@ -151,7 +165,8 @@ fun AstralSplitterApp() {
                 },
                 onProceed = {
                     val info = metadata
-                    if (info == null) {
+                    val currentBitmap = stitchedBitmap
+                    if (info == null || currentBitmap == null) {
                         showToast(context, "Pilih gambar terlebih dahulu")
                         return@SetupScreen
                     }
@@ -168,7 +183,7 @@ fun AstralSplitterApp() {
                         showToast(context, "Tidak ada potongan yang dibutuhkan")
                         return@SetupScreen
                     }
-                    previewState = PreviewState(info, cuts, outputFormat)
+                    previewState = PreviewState(info, cuts, outputFormat, currentBitmap)
                 }
             )
         } else {
@@ -192,6 +207,8 @@ fun SetupScreen(
     splitMode: SplitMode,
     splitValue: String,
     outputFormat: OutputFormat,
+    isLoadingImage: Boolean,
+    previewBitmap: Bitmap?,
     onSplitModeChange: (SplitMode) -> Unit,
     onSplitValueChange: (String) -> Unit,
     onFormatChange: (OutputFormat) -> Unit,
@@ -210,21 +227,33 @@ fun SetupScreen(
         Button(onClick = onPickImage, modifier = Modifier.fillMaxWidth()) {
             Text("Pilih Gambar")
         }
-        if (metadata != null) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(metadata.uri)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = "Pratinjau",
+        if (isLoadingImage) {
+            Text(
+                text = "Memuat gambar...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.secondary
+            )
+        }
+        if (metadata != null && previewBitmap != null) {
+            BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(240.dp)
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium),
-                contentScale = ContentScale.Crop
-            )
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            ) {
+                val aspectRatio = metadata.width.toFloat() / metadata.height.toFloat()
+                val displayWidth = maxWidth
+                val displayHeight = (displayWidth / aspectRatio).coerceAtMost(320.dp)
+                Image(
+                    bitmap = previewBitmap.asImageBitmap(),
+                    contentDescription = "Pratinjau",
+                    modifier = Modifier
+                        .width(displayWidth)
+                        .height(displayHeight),
+                    contentScale = ContentScale.FillBounds
+                )
+            }
             Text(
-                text = "Ukuran gambar: ${metadata.width} x ${metadata.height} px",
+                text = "Ukuran gabungan: ${metadata.width} x ${metadata.height} px (${metadata.uris.size} gambar)",
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -257,7 +286,11 @@ fun SetupScreen(
                 )
             }
         }
-        Button(onClick = onProceed, modifier = Modifier.fillMaxWidth(), enabled = metadata != null) {
+        Button(
+            onClick = onProceed,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = metadata != null && previewBitmap != null && !isLoadingImage
+        ) {
             Text("Potong")
         }
     }
@@ -294,15 +327,8 @@ fun PreviewScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var bitmap by remember(state.metadata.uri) { mutableStateOf<Bitmap?>(null) }
     var isSaving by remember { mutableStateOf(false) }
-    val cutPositions = remember(state.cutPositions) { mutableStateListOf<Float>().apply { addAll(state.cutPositions) } }
-
-    LaunchedEffect(state.metadata.uri) {
-        bitmap = withContext(Dispatchers.IO) {
-            loadBitmap(context, state.metadata.uri)
-        }
-    }
+    val cutPositions = remember(state.metadata, state.cutPositions) { mutableStateListOf<Float>().apply { addAll(state.cutPositions) } }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -327,11 +353,7 @@ fun PreviewScreen(
             ) {
                 Button(
                     onClick = {
-                        val sourceBitmap = bitmap
-                        if (sourceBitmap == null) {
-                            showToast(context, "Gambar belum siap")
-                            return@Button
-                        }
+                        val sourceBitmap = state.bitmap
                         coroutineScope.launch {
                             isSaving = true
                             val result = withContext(Dispatchers.IO) {
@@ -357,78 +379,67 @@ fun PreviewScreen(
             }
         }
     ) { innerPadding ->
-        val imageBitmap = bitmap
-        if (imageBitmap == null) {
-            Box(
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Memuat gambar...")
-            }
-        } else {
-            val scrollState = rememberScrollState()
-            Column(
-                modifier = Modifier
-                    .padding(innerPadding)
-                    .verticalScroll(scrollState)
-                    .fillMaxSize()
-            ) {
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val density = LocalDensity.current
-                    val displayWidth = maxWidth * 0.85f
-                    val displayHeight = if (imageBitmap.width > 0) {
-                        displayWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
-                    } else {
-                        0.dp
-                    }
-                    val displayHeightPx = with(density) { displayHeight.toPx() }.coerceAtLeast(1f)
-                    val scale = imageBitmap.height.toFloat() / displayHeightPx
+        val imageBitmap = state.bitmap
+        val scrollState = rememberScrollState()
+        Column(
+            modifier = Modifier
+                .padding(innerPadding)
+                .verticalScroll(scrollState)
+                .fillMaxSize()
+        ) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val density = LocalDensity.current
+                val displayWidth = maxWidth * 0.85f
+                val displayHeight = if (imageBitmap.width > 0) {
+                    displayWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
+                } else {
+                    0.dp
+                }
+                val displayHeightPx = with(density) { displayHeight.toPx() }.coerceAtLeast(1f)
+                val scale = imageBitmap.height.toFloat() / displayHeightPx
 
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(displayHeight)
+                        .background(Color.Black)
+                        .padding(end = 12.dp)
+                ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .height(displayHeight)
-                            .background(Color.Black)
-                            .padding(end = 12.dp)
+                            .width(displayWidth)
+                            .fillMaxHeight()
+                            .align(Alignment.CenterStart)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .width(displayWidth)
-                                .fillMaxHeight()
-                                .align(Alignment.CenterStart)
-                        ) {
-                            Image(
-                                bitmap = imageBitmap.asImageBitmap(),
-                                contentDescription = "Gambar yang akan dipotong",
-                                contentScale = ContentScale.FillBounds,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        cutPositions.forEachIndexed { index, positionPx ->
-                            val displayOffset = positionPx / scale
-                            val yOffset = with(density) { displayOffset.toDp() }
-                            SliderOverlay(
-                                position = yOffset,
-                                onDrag = { deltaPx ->
-                                    val imageDelta = deltaPx * scale
-                                    val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
-                                    val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
-                                    val updated = (positionPx + imageDelta).coerceIn(previous, next)
-                                    cutPositions[index] = updated
-                                }
-                            )
-                        }
+                        Image(
+                            bitmap = imageBitmap.asImageBitmap(),
+                            contentDescription = "Gambar yang akan dipotong",
+                            contentScale = ContentScale.FillBounds,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    cutPositions.forEachIndexed { index, positionPx ->
+                        val displayOffset = positionPx / scale
+                        val yOffset = with(density) { displayOffset.toDp() }
+                        SliderOverlay(
+                            position = yOffset,
+                            onDrag = { deltaPx ->
+                                val imageDelta = deltaPx * scale
+                                val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
+                                val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
+                                val updated = (positionPx + imageDelta).coerceIn(previous, next)
+                                cutPositions[index] = updated
+                            }
+                        )
                     }
                 }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Geser garis untuk mengatur posisi potong. Total bagian: ${cutPositions.size + 1}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
             }
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Geser garis untuk mengatur posisi potong. Total bagian: ${cutPositions.size + 1}",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
         }
     }
 }
@@ -440,14 +451,10 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
             .fillMaxWidth()
             .offset(y = position - 12.dp)
             .height(24.dp)
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDrag = { change, dragAmount ->
-                        change.consumePositionChange()
-                        onDrag(dragAmount.y)
-                    }
-                )
-            }
+            .draggable(
+                orientation = Orientation.Vertical,
+                state = rememberDraggableState { delta -> onDrag(delta) }
+            )
     ) {
         Divider(
             modifier = Modifier
@@ -464,6 +471,93 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
         )
     }
+}
+
+fun stitchSelectedImages(context: Context, uris: List<Uri>): StitchedSelection {
+    if (uris.isEmpty()) throw IllegalArgumentException("Tidak ada gambar yang dipilih")
+    val bitmaps = uris.map { uri -> decodeBitmapSoft(context, uri) }
+    val stitched = stitchBitmaps(bitmaps)
+    return StitchedSelection(stitched, uris)
+}
+
+fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
+    val source = ImageDecoder.createSource(context.contentResolver, uri)
+    return ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+        decoder.isMutableRequired = false
+        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+    }
+}
+
+fun stitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
+    require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
+    if (bitmaps.size == 1) return bitmaps.first()
+
+    val overlaps = MutableList(bitmaps.size) { 0 }
+    for (index in 1 until bitmaps.size) {
+        overlaps[index] = findVerticalOverlap(bitmaps[index - 1], bitmaps[index])
+    }
+
+    var totalHeight = bitmaps.first().height
+    for (index in 1 until bitmaps.size) {
+        totalHeight += bitmaps[index].height - overlaps[index]
+    }
+    val maxWidth = bitmaps.maxOf { it.width }
+    val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+
+    var yOffset = 0
+    canvas.drawBitmap(bitmaps.first(), 0f, yOffset.toFloat(), null)
+    for (index in 1 until bitmaps.size) {
+        yOffset += bitmaps[index - 1].height - overlaps[index]
+        canvas.drawBitmap(bitmaps[index], 0f, yOffset.toFloat(), null)
+    }
+    return result
+}
+
+fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 400): Int {
+    val usableWidth = minOf(top.width, bottom.width)
+    val searchHeight = minOf(maxSearch, top.height, bottom.height)
+    if (usableWidth <= 0 || searchHeight <= 0) return 0
+
+    var bestOverlap = 0
+    var bestDiff = Float.MAX_VALUE
+    for (overlap in searchHeight downTo 1) {
+        val samples = minOf(10, overlap)
+        val step = maxOf(1, overlap / samples)
+        var diffSum = 0L
+        var rowsChecked = 0
+        var rowIndex = 0
+        while (rowIndex < overlap) {
+            val topRow = top.height - overlap + rowIndex
+            val bottomRow = rowIndex
+            diffSum += rowDifference(top, bottom, usableWidth, topRow, bottomRow)
+            rowsChecked++
+            rowIndex += step
+        }
+        val normalizedDiff = diffSum.toFloat() / (rowsChecked * usableWidth * 3 * 255f)
+        if (normalizedDiff < bestDiff) {
+            bestDiff = normalizedDiff
+            bestOverlap = overlap
+        }
+    }
+
+    return if (bestDiff < 0.02f) bestOverlap else 0
+}
+
+fun rowDifference(top: Bitmap, bottom: Bitmap, width: Int, topY: Int, bottomY: Int): Long {
+    val topRow = IntArray(width)
+    val bottomRow = IntArray(width)
+    top.getPixels(topRow, 0, width, 0, topY, width, 1)
+    bottom.getPixels(bottomRow, 0, width, 0, bottomY, width, 1)
+    var diff = 0L
+    for (index in 0 until width) {
+        val topColor = topRow[index]
+        val bottomColor = bottomRow[index]
+        diff += abs(AndroidColor.red(topColor) - AndroidColor.red(bottomColor))
+        diff += abs(AndroidColor.green(topColor) - AndroidColor.green(bottomColor))
+        diff += abs(AndroidColor.blue(topColor) - AndroidColor.blue(bottomColor))
+    }
+    return diff
 }
 
 suspend fun performCuts(
@@ -498,29 +592,6 @@ fun generateCutsByCount(imageHeight: Int, slices: Int): List<Float> {
     if (slices <= 1) return emptyList()
     val interval = imageHeight.toFloat() / slices
     return (1 until slices).map { it * interval }
-}
-
-fun loadImageDimensions(context: Context, uri: Uri): Pair<Int, Int>? {
-    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    return try {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-            BitmapFactory.decodeStream(stream, null, options)
-        }
-        if (options.outWidth > 0 && options.outHeight > 0) options.outWidth to options.outHeight else null
-    } catch (e: IOException) {
-        null
-    }
-}
-
-fun loadBitmap(context: Context, uri: Uri): Bitmap? {
-    return try {
-        val source = ImageDecoder.createSource(context.contentResolver, uri)
-        ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-            decoder.isMutableRequired = false
-        }
-    } catch (e: Exception) {
-        null
-    }
 }
 
 fun showToast(context: Context, message: String) {
