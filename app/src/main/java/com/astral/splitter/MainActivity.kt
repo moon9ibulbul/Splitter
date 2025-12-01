@@ -470,6 +470,12 @@ fun PreviewScreen(
                     val checkpoints = listOf(0f) + cutPositions.sorted() + listOf(imageBitmap.height.toFloat())
                     checkpoints.zipWithNext { start, end -> end - start }
                 }
+                val sliderHeights = remember(cutPositions.toList(), imageBitmap.height) {
+                    cutPositions.mapIndexed { index, cut ->
+                        val previous = if (index == 0) 0f else cutPositions[index - 1]
+                        (cut - previous).coerceAtLeast(0f)
+                    }
+                }
 
                 Box(
                     modifier = Modifier
@@ -505,8 +511,10 @@ fun PreviewScreen(
                     cutPositions.forEachIndexed { index, positionPx ->
                         val displayOffset = positionPx / scale
                         val yOffset = with(density) { displayOffset.toDp() }
+                        val sliderLabel = "${sliderHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
                         SliderOverlay(
                             position = yOffset,
+                            label = sliderLabel,
                             onDrag = { deltaPx ->
                                 val imageDelta = deltaPx * scale
                                 val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
@@ -529,12 +537,12 @@ fun PreviewScreen(
 }
 
 @Composable
-fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
+fun SliderOverlay(position: Dp, label: String, onDrag: (Float) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = position - 12.dp)
-            .height(24.dp)
+            .offset(y = position - 24.dp)
+            .height(56.dp)
             .draggable(
                 orientation = Orientation.Vertical,
                 state = rememberDraggableState { delta -> onDrag(delta) }
@@ -547,13 +555,29 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
             thickness = 3.dp,
             color = MaterialTheme.colorScheme.secondary
         )
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .align(Alignment.CenterEnd)
-                .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
-        )
+        Column(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+            Box(
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .size(36.dp)
+                    .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
+            )
+        }
     }
 }
 
@@ -619,50 +643,66 @@ fun smartStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
     return result
 }
 
-fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 400): Int {
+fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 900): Int {
     val usableWidth = minOf(top.width, bottom.width)
     val searchHeight = minOf(maxSearch, top.height, bottom.height)
     if (usableWidth <= 0 || searchHeight <= 0) return 0
 
+    val sampleColumns = minOf(80, usableWidth)
+    val columnStep = maxOf(1, usableWidth / sampleColumns)
+
     var bestOverlap = 0
     var bestDiff = Float.MAX_VALUE
-    for (overlap in searchHeight downTo 1) {
-        val samples = minOf(10, overlap)
-        val step = maxOf(1, overlap / samples)
-        var diffSum = 0L
+    for (overlap in 1..searchHeight) {
+        val rowStep = maxOf(1, overlap / 12)
+        var diffSum = 0f
         var rowsChecked = 0
         var rowIndex = 0
         while (rowIndex < overlap) {
             val topRow = top.height - overlap + rowIndex
             val bottomRow = rowIndex
-            diffSum += rowDifference(top, bottom, usableWidth, topRow, bottomRow)
+            diffSum += sampledRowDifference(top, bottom, usableWidth, topRow, bottomRow, columnStep)
             rowsChecked++
-            rowIndex += step
+            rowIndex += rowStep
         }
-        val normalizedDiff = diffSum.toFloat() / (rowsChecked * usableWidth * 3 * 255f)
+        if (rowsChecked == 0) continue
+        val normalizedDiff = diffSum / rowsChecked
         if (normalizedDiff < bestDiff) {
             bestDiff = normalizedDiff
             bestOverlap = overlap
         }
     }
 
-    return if (bestDiff < 0.02f) bestOverlap else 0
+    return bestOverlap
 }
 
-fun rowDifference(top: Bitmap, bottom: Bitmap, width: Int, topY: Int, bottomY: Int): Long {
+fun sampledRowDifference(
+    top: Bitmap,
+    bottom: Bitmap,
+    width: Int,
+    topY: Int,
+    bottomY: Int,
+    columnStep: Int
+): Float {
     val topRow = IntArray(width)
     val bottomRow = IntArray(width)
     top.getPixels(topRow, 0, width, 0, topY, width, 1)
     bottom.getPixels(bottomRow, 0, width, 0, bottomY, width, 1)
+
     var diff = 0L
-    for (index in 0 until width) {
-        val topColor = topRow[index]
-        val bottomColor = bottomRow[index]
+    var samples = 0
+    var columnIndex = 0
+    while (columnIndex < width) {
+        val topColor = topRow[columnIndex]
+        val bottomColor = bottomRow[columnIndex]
         diff += abs(AndroidColor.red(topColor) - AndroidColor.red(bottomColor))
         diff += abs(AndroidColor.green(topColor) - AndroidColor.green(bottomColor))
         diff += abs(AndroidColor.blue(topColor) - AndroidColor.blue(bottomColor))
+        samples++
+        columnIndex += columnStep
     }
-    return diff
+    if (samples == 0) return Float.MAX_VALUE
+    return diff.toFloat() / (samples * 3 * 255f)
 }
 
 suspend fun performCuts(
