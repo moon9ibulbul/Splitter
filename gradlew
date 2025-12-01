@@ -8,6 +8,7 @@
 
 APP_HOME=$(cd "$(dirname "$0")" && pwd -P)
 WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+WRAPPER_JAR_B64="$APP_HOME/gradle/wrapper/gradle-wrapper.jar.base64"
 PROPERTIES_FILE="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
 
 distributionUrl=""
@@ -22,6 +23,20 @@ wrapper_valid() {
     jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/GradleWrapperMain.class" || return 1
   fi
   return 0
+}
+
+restore_wrapper_from_base64() {
+  command -v base64 >/dev/null 2>&1 || return 1
+  [ -f "$WRAPPER_JAR_B64" ] || return 1
+
+  mkdir -p "$(dirname "$WRAPPER_JAR")"
+  if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null && wrapper_valid; then
+    echo "gradle-wrapper.jar restored from base64." >&2
+    return 0
+  fi
+
+  rm -f "$WRAPPER_JAR"
+  return 1
 }
 
 download_wrapper_from_distribution() {
@@ -104,8 +119,10 @@ generate_wrapper_with_gradle() {
 }
 
 if ! wrapper_valid; then
-  echo "gradle-wrapper.jar missing, downloading from Gradle distribution..." >&2
-  if [ -n "$distributionUrl" ] && download_wrapper_from_distribution && wrapper_valid; then
+  echo "gradle-wrapper.jar missing, attempting offline restore..." >&2
+  if restore_wrapper_from_base64; then
+    :
+  elif [ -n "$distributionUrl" ] && download_wrapper_from_distribution && wrapper_valid; then
     :
   elif generate_wrapper_with_gradle; then
     :
