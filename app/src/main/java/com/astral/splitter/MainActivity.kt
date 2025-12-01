@@ -57,16 +57,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.input.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.toDp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.astral.splitter.ui.theme.AstralSplitterTheme
@@ -235,6 +233,7 @@ fun SetupScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RowedChips(splitMode: SplitMode, onSplitModeChange: (SplitMode) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -339,7 +338,7 @@ fun PreviewScreen(
             }
         } else {
             val density = LocalDensity.current
-            val imageHeightDp: Dp = with(density) { imageBitmap.height.toDp() }
+            val imageHeightDp: Dp = with(density) { (imageBitmap.height / density).dp }
             val scrollState = rememberScrollState()
             Column(
                 modifier = Modifier
@@ -359,7 +358,7 @@ fun PreviewScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     cutPositions.forEachIndexed { index, positionPx ->
-                        val yOffset = with(density) { positionPx.toDp() }
+                        val yOffset = with(density) { (positionPx / density).dp }
                         SliderOverlay(
                             position = yOffset,
                             onDrag = { deltaPx ->
@@ -390,8 +389,7 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
             .offset(y = position - 12.dp)
             .height(24.dp)
             .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
+                detectDragGestures { _, dragAmount ->
                     onDrag(dragAmount.y)
                 }
             }
