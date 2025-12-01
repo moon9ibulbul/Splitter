@@ -8,6 +8,7 @@
 
 APP_HOME=$(cd "$(dirname "$0")" && pwd -P)
 WRAPPER_JAR="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+WRAPPER_JAR_B64="$APP_HOME/gradle/wrapper/gradle-wrapper.jar.base64"
 PROPERTIES_FILE="$APP_HOME/gradle/wrapper/gradle-wrapper.properties"
 
 distributionUrl=""
@@ -51,10 +52,22 @@ download_wrapper_from_distribution() {
 }
 
 if [ ! -f "$WRAPPER_JAR" ]; then
-  echo "gradle-wrapper.jar missing, extracting from distribution..." >&2
-  if [ -z "$distributionUrl" ] || ! download_wrapper_from_distribution; then
-    echo "Failed to provision gradle-wrapper.jar; check network access to the Gradle distribution." >&2
-    exit 1
+  echo "gradle-wrapper.jar missing, restoring from base64 payload..." >&2
+  if command -v base64 >/dev/null 2>&1 && [ -f "$WRAPPER_JAR_B64" ]; then
+    if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null; then
+      echo "gradle-wrapper.jar restored from base64." >&2
+    else
+      echo "Failed to decode gradle-wrapper.jar from base64; trying distribution download." >&2
+      rm -f "$WRAPPER_JAR"
+    fi
+  fi
+
+  if [ ! -f "$WRAPPER_JAR" ]; then
+    echo "Extracting gradle-wrapper.jar from distribution..." >&2
+    if [ -z "$distributionUrl" ] || ! download_wrapper_from_distribution; then
+      echo "Failed to provision gradle-wrapper.jar; check network access to the Gradle distribution." >&2
+      exit 1
+    fi
   fi
 fi
 
