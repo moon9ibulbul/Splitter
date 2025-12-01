@@ -82,6 +82,7 @@ import java.io.IOException
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -107,6 +108,7 @@ data class PreviewState(
     val metadata: ImageMetadata,
     val cutPositions: List<Float>,
     val outputFormat: OutputFormat,
+    val outputQuality: Int,
     val bitmap: Bitmap
 )
 
@@ -123,6 +125,7 @@ fun AstralSplitterApp() {
     var splitValue by remember { mutableStateOf("") }
     var previewState by remember { mutableStateOf<PreviewState?>(null) }
     var outputFormat by remember { mutableStateOf(OutputFormat.PNG) }
+    var outputQuality by remember { mutableStateOf(100) }
     var isLoadingImages by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -163,7 +166,9 @@ fun AstralSplitterApp() {
                 onSplitModeChange = { splitMode = it },
                 onSplitValueChange = { splitValue = it },
                 outputFormat = outputFormat,
+                outputQuality = outputQuality,
                 onFormatChange = { outputFormat = it },
+                onQualityChange = { outputQuality = it },
                 onPickImage = {
                     pickImageLauncher.launch("image/*")
                 },
@@ -187,7 +192,7 @@ fun AstralSplitterApp() {
                         showToast(context, "Tidak ada potongan yang dibutuhkan")
                         return@SetupScreen
                     }
-                    previewState = PreviewState(info, cuts, outputFormat, currentBitmap)
+                    previewState = PreviewState(info, cuts, outputFormat, outputQuality, currentBitmap)
                 }
             )
         } else {
@@ -216,11 +221,13 @@ fun SetupScreen(
     splitMode: SplitMode,
     splitValue: String,
     outputFormat: OutputFormat,
+    outputQuality: Int,
     isLoadingImage: Boolean,
     previewBitmap: Bitmap?,
     onSplitModeChange: (SplitMode) -> Unit,
     onSplitValueChange: (String) -> Unit,
     onFormatChange: (OutputFormat) -> Unit,
+    onQualityChange: (Int) -> Unit,
     onPickImage: () -> Unit,
     onProceed: () -> Unit
 ) {
@@ -320,6 +327,18 @@ fun SetupScreen(
                     label = { Text("JPG") }
                 )
             }
+            if (outputFormat == OutputFormat.JPEG) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(text = "Kualitas JPG (${outputQuality}%)", style = MaterialTheme.typography.bodyMedium)
+                    Slider(
+                        value = outputQuality.toFloat(),
+                        onValueChange = { onQualityChange(it.roundToInt().coerceIn(1, 100)) },
+                        valueRange = 1f..100f,
+                        steps = 98,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
         }
         Button(
             onClick = onProceed,
@@ -396,7 +415,7 @@ fun PreviewScreen(
                             val result = withContext(Dispatchers.IO) {
                                 runCatching {
                                     val normalized = cutPositions.sorted()
-                                    performCuts(context, sourceBitmap, normalized, state.outputFormat)
+                                    performCuts(context, sourceBitmap, normalized, state.outputFormat, state.outputQuality)
                                 }
                             }
                             isSaving = false
@@ -701,6 +720,41 @@ fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 1600): Int
         }
     }
 
+    if (bestOverlap == 0) return 0
+    return refineOverlap(top, bottom, usableWidth, searchHeight, columnStep, bestOverlap)
+}
+
+fun refineOverlap(
+    top: Bitmap,
+    bottom: Bitmap,
+    width: Int,
+    maxOverlap: Int,
+    columnStep: Int,
+    initialBest: Int
+): Int {
+    var bestOverlap = initialBest
+    var bestScore = Float.MAX_VALUE
+    val start = maxOf(1, initialBest - 8)
+    val end = minOf(maxOverlap, initialBest + 8)
+    for (overlap in start..end) {
+        val rowStep = maxOf(1, overlap / 20)
+        var diffSum = 0f
+        var rowsChecked = 0
+        var rowIndex = 0
+        while (rowIndex < overlap) {
+            val topRow = top.height - overlap + rowIndex
+            val bottomRow = rowIndex
+            diffSum += sampledRowDifference(top, bottom, width, topRow, bottomRow, columnStep)
+            rowsChecked++
+            rowIndex += rowStep
+        }
+        if (rowsChecked == 0) continue
+        val score = diffSum / rowsChecked
+        if (score < bestScore) {
+            bestScore = score
+            bestOverlap = overlap
+        }
+    }
     return bestOverlap
 }
 
@@ -776,7 +830,8 @@ suspend fun performCuts(
     context: Context,
     source: Bitmap,
     positions: List<Float>,
-    format: OutputFormat
+    format: OutputFormat,
+    quality: Int
 ) {
     val sorted = positions.sorted()
     val extended = listOf(0f) + sorted + listOf(source.height.toFloat())
@@ -785,7 +840,7 @@ suspend fun performCuts(
         val end = extended[index + 1].toInt().coerceIn(0, source.height)
         if (end - start <= 0) continue
         val segment = Bitmap.createBitmap(source, 0, start, source.width, end - start)
-        saveBitmap(context, segment, index + 1, format)
+        saveBitmap(context, segment, index + 1, format, quality)
     }
 }
 
@@ -810,7 +865,7 @@ fun showToast(context: Context, message: String) {
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
 
-fun saveBitmap(context: Context, bitmap: Bitmap, index: Int, format: OutputFormat) {
+fun saveBitmap(context: Context, bitmap: Bitmap, index: Int, format: OutputFormat, quality: Int) {
     val resolver = context.contentResolver
     val filename = "AstralSplitter_${DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(LocalDateTime.now())}_$index.${format.extension}"
     val contentValues = ContentValues().apply {
@@ -823,8 +878,9 @@ fun saveBitmap(context: Context, bitmap: Bitmap, index: Int, format: OutputForma
     val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
         ?: throw IOException("Tidak dapat membuat berkas output")
     resolver.openOutputStream(uri)?.use { outputStream ->
-        val quality = if (format == OutputFormat.JPEG) 95 else 100
-        if (!bitmap.compress(format.compressFormat, quality, outputStream)) {
+        val normalizedQuality = quality.coerceIn(1, 100)
+        val compressionQuality = if (format == OutputFormat.JPEG) normalizedQuality else 100
+        if (!bitmap.compress(format.compressFormat, compressionQuality, outputStream)) {
             throw IOException("Gagal menyimpan potongan")
         }
     }
