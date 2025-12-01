@@ -19,23 +19,54 @@ fi
 wrapper_valid() {
   [ -f "$WRAPPER_JAR" ] || return 1
   if command -v jar >/dev/null 2>&1; then
-    jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/IDownload.class" || return 1
     jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/GradleWrapperMain.class" || return 1
+
+    if jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/IDownload.class"; then
+      :
+    elif jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "gradle-wrapper.jar"; then
+      :
+    else
+      return 1
+    fi
   fi
   return 0
 }
 
 restore_wrapper_from_base64() {
-  command -v base64 >/dev/null 2>&1 || return 1
   [ -f "$WRAPPER_JAR_B64" ] || return 1
 
   mkdir -p "$(dirname "$WRAPPER_JAR")"
-  if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null && wrapper_valid; then
-    echo "gradle-wrapper.jar restored from base64." >&2
-    return 0
+
+  if command -v base64 >/dev/null 2>&1; then
+    if base64 -d "$WRAPPER_JAR_B64" > "$WRAPPER_JAR" 2>/dev/null && wrapper_valid; then
+      echo "gradle-wrapper.jar restored from base64." >&2
+      return 0
+    fi
+
+    rm -f "$WRAPPER_JAR"
   fi
 
-  rm -f "$WRAPPER_JAR"
+  for py in python3 python; do
+    command -v "$py" >/dev/null 2>&1 || continue
+
+    if "$py" - "$WRAPPER_JAR_B64" "$WRAPPER_JAR" <<'PY'
+import base64, pathlib, sys
+
+b64_path = pathlib.Path(sys.argv[1])
+jar_path = pathlib.Path(sys.argv[2])
+
+jar_path.write_bytes(base64.b64decode(b64_path.read_bytes()))
+PY
+    then
+      if wrapper_valid; then
+        echo "gradle-wrapper.jar restored from base64." >&2
+        return 0
+      fi
+
+      rm -f "$WRAPPER_JAR"
+    fi
+  done
+
   return 1
 }
 
