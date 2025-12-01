@@ -253,6 +253,7 @@ fun RowedChips(splitMode: SplitMode, onSplitModeChange: (SplitMode) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PreviewScreen(
     modifier: Modifier = Modifier,
@@ -338,7 +339,7 @@ fun PreviewScreen(
             }
         } else {
             val density = LocalDensity.current
-            val imageHeightDp: Dp = with(density) { (imageBitmap.height / density).dp }
+            val imageHeightDp: Dp = with(density) { imageBitmap.height.toDp() }
             val scrollState = rememberScrollState()
             Column(
                 modifier = Modifier
@@ -358,7 +359,7 @@ fun PreviewScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                     cutPositions.forEachIndexed { index, positionPx ->
-                        val yOffset = with(density) { (positionPx / density).dp }
+                        val yOffset = with(density) { positionPx.toDp() }
                         SliderOverlay(
                             position = yOffset,
                             onDrag = { deltaPx ->
