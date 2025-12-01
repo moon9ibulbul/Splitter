@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -64,6 +65,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -129,7 +133,7 @@ fun AstralSplitterApp() {
         isLoadingImages = true
         coroutineScope.launch {
             val stitched = withContext(Dispatchers.IO) {
-                runCatching { stitchSelectedImages(context, uris) }
+                runCatching { stitchSelectedImages(context, uris, smart = false) }
             }
             isLoadingImages = false
             stitched.onSuccess { selection ->
@@ -194,6 +198,11 @@ fun AstralSplitterApp() {
                 onBack = { previewState = null },
                 onCutsConfirmed = {
                     previewState = null
+                },
+                onStateChange = { updated ->
+                    previewState = updated
+                    metadata = updated.metadata
+                    stitchedBitmap = updated.bitmap
                 }
             )
         }
@@ -235,27 +244,53 @@ fun SetupScreen(
             )
         }
         if (metadata != null && previewBitmap != null) {
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
-            ) {
-                val aspectRatio = metadata.width.toFloat() / metadata.height.toFloat()
-                val displayWidth = maxWidth
-                val displayHeight = (displayWidth / aspectRatio).coerceAtMost(320.dp)
-                Image(
-                    bitmap = previewBitmap.asImageBitmap(),
-                    contentDescription = "Pratinjau",
+            if (metadata.uris.size == 1) {
+                BoxWithConstraints(
                     modifier = Modifier
-                        .width(displayWidth)
-                        .height(displayHeight),
-                    contentScale = ContentScale.FillBounds
-                )
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                ) {
+                    val aspectRatio = metadata.width.toFloat() / metadata.height.toFloat()
+                    val displayWidth = maxWidth
+                    val displayHeight = (displayWidth / aspectRatio).coerceAtMost(320.dp)
+                    Box(
+                        modifier = Modifier
+                            .width(displayWidth)
+                            .height(displayHeight)
+                    ) {
+                        Image(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .matchParentSize()
+                                .blur(18.dp)
+                                .alpha(0.6f),
+                            contentScale = ContentScale.Crop
+                        )
+                        Image(
+                            bitmap = previewBitmap.asImageBitmap(),
+                            contentDescription = "Pratinjau",
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .width(displayWidth)
+                                .height(displayHeight)
+                                .clip(RoundedCornerShape(12.dp)),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
             }
             Text(
                 text = "Ukuran gabungan: ${metadata.width} x ${metadata.height} px (${metadata.uris.size} gambar)",
                 style = MaterialTheme.typography.bodyMedium
             )
+            if (metadata.uris.size > 1) {
+                Text(
+                    text = "Preview awal tidak ditampilkan untuk banyak gambar. Cek di layar Atur Potongan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
         }
 
         Text(text = "Opsi pemotongan", style = MaterialTheme.typography.titleMedium)
@@ -323,11 +358,13 @@ fun PreviewScreen(
     state: PreviewState,
     snackbarHostState: SnackbarHostState,
     onBack: () -> Unit,
-    onCutsConfirmed: () -> Unit
+    onCutsConfirmed: () -> Unit,
+    onStateChange: (PreviewState) -> Unit
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isSaving by remember { mutableStateOf(false) }
+    var isSmartProcessing by remember { mutableStateOf(false) }
     val cutPositions = remember(state.metadata, state.cutPositions) { mutableStateListOf<Float>().apply { addAll(state.cutPositions) } }
 
     Scaffold(
@@ -387,6 +424,38 @@ fun PreviewScreen(
                 .verticalScroll(scrollState)
                 .fillMaxSize()
         ) {
+            if (state.metadata.uris.size > 1) {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            isSmartProcessing = true
+                            val stitched = withContext(Dispatchers.IO) {
+                                runCatching { stitchSelectedImages(context, state.metadata.uris, smart = true) }
+                            }
+                            isSmartProcessing = false
+                            stitched.onSuccess { selection ->
+                                val scale = selection.bitmap.height.toFloat() / state.bitmap.height.toFloat()
+                                val newCuts = cutPositions.map { it * scale }
+                                val updatedState = state.copy(
+                                    metadata = ImageMetadata(selection.uris, selection.bitmap.width, selection.bitmap.height),
+                                    cutPositions = newCuts,
+                                    bitmap = selection.bitmap
+                                )
+                                onStateChange(updatedState)
+                                snackbarHostState.showSnackbar("Smart stitch selesai")
+                            }.onFailure {
+                                snackbarHostState.showSnackbar(it.message ?: "Smart stitch gagal")
+                            }
+                        }
+                    },
+                    enabled = !isSaving && !isSmartProcessing,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(if (isSmartProcessing) "Memproses Smart Stitch..." else "Smart Stitch")
+                }
+            }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val density = LocalDensity.current
                 val displayWidth = maxWidth * 0.85f
@@ -397,6 +466,10 @@ fun PreviewScreen(
                 }
                 val displayHeightPx = with(density) { displayHeight.toPx() }.coerceAtLeast(1f)
                 val scale = imageBitmap.height.toFloat() / displayHeightPx
+                val pieceHeights = remember(cutPositions.toList(), imageBitmap.height) {
+                    val checkpoints = listOf(0f) + cutPositions.sorted() + listOf(imageBitmap.height.toFloat())
+                    checkpoints.zipWithNext { start, end -> end - start }
+                }
 
                 Box(
                     modifier = Modifier
@@ -405,6 +478,17 @@ fun PreviewScreen(
                         .background(Color.Black)
                         .padding(end = 12.dp)
                 ) {
+                    if (pieceHeights.isNotEmpty()) {
+                        Text(
+                            text = pieceHeights.joinToString(prefix = "Tinggi potongan: ", separator = " px, ", postfix = " px") {
+                                it.toInt().coerceAtLeast(1).toString()
+                            },
+                            color = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(8.dp)
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .width(displayWidth)
@@ -473,10 +557,14 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
     }
 }
 
-fun stitchSelectedImages(context: Context, uris: List<Uri>): StitchedSelection {
+fun stitchSelectedImages(context: Context, uris: List<Uri>, smart: Boolean): StitchedSelection {
     if (uris.isEmpty()) throw IllegalArgumentException("Tidak ada gambar yang dipilih")
     val bitmaps = uris.map { uri -> decodeBitmapSoft(context, uri) }
-    val stitched = stitchBitmaps(bitmaps)
+    val stitched = if (smart && uris.size > 1) {
+        smartStitchBitmaps(bitmaps)
+    } else {
+        simpleStitchBitmaps(bitmaps)
+    }
     return StitchedSelection(stitched, uris)
 }
 
@@ -488,7 +576,24 @@ fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
     }
 }
 
-fun stitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
+fun simpleStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
+    require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
+    if (bitmaps.size == 1) return bitmaps.first()
+
+    val totalHeight = bitmaps.sumOf { it.height }
+    val maxWidth = bitmaps.maxOf { it.width }
+    val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(result)
+
+    var yOffset = 0
+    bitmaps.forEach { bitmap ->
+        canvas.drawBitmap(bitmap, 0f, yOffset.toFloat(), null)
+        yOffset += bitmap.height
+    }
+    return result
+}
+
+fun smartStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
     require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
     if (bitmaps.size == 1) return bitmaps.first()
 
