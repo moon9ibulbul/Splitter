@@ -470,10 +470,16 @@ fun PreviewScreen(
                     val checkpoints = listOf(0f) + cutPositions.sorted() + listOf(imageBitmap.height.toFloat())
                     checkpoints.zipWithNext { start, end -> end - start }
                 }
-                val sliderHeights = remember(cutPositions.toList(), imageBitmap.height) {
+                val sliderTopHeights = remember(cutPositions.toList(), imageBitmap.height) {
                     cutPositions.mapIndexed { index, cut ->
                         val previous = if (index == 0) 0f else cutPositions[index - 1]
                         (cut - previous).coerceAtLeast(0f)
+                    }
+                }
+                val sliderBottomHeights = remember(cutPositions.toList(), imageBitmap.height) {
+                    cutPositions.mapIndexed { index, cut ->
+                        val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1]
+                        (next - cut).coerceAtLeast(0f)
                     }
                 }
 
@@ -511,10 +517,12 @@ fun PreviewScreen(
                     cutPositions.forEachIndexed { index, positionPx ->
                         val displayOffset = positionPx / scale
                         val yOffset = with(density) { displayOffset.toDp() }
-                        val sliderLabel = "${sliderHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                        val topLabel = "${sliderTopHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                        val bottomLabel = "${sliderBottomHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
                         SliderOverlay(
                             position = yOffset,
-                            label = sliderLabel,
+                            topLabel = topLabel,
+                            bottomLabel = bottomLabel,
                             onDrag = { deltaPx ->
                                 val imageDelta = deltaPx * scale
                                 val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
@@ -537,12 +545,12 @@ fun PreviewScreen(
 }
 
 @Composable
-fun SliderOverlay(position: Dp, label: String, onDrag: (Float) -> Unit) {
+fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (Float) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = position - 24.dp)
-            .height(56.dp)
+            .offset(y = position - 48.dp)
+            .height(96.dp)
             .draggable(
                 orientation = Orientation.Vertical,
                 state = rememberDraggableState { delta -> onDrag(delta) }
@@ -560,7 +568,7 @@ fun SliderOverlay(position: Dp, label: String, onDrag: (Float) -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = label,
+                text = topLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
@@ -576,6 +584,18 @@ fun SliderOverlay(position: Dp, label: String, onDrag: (Float) -> Unit) {
                     .size(36.dp)
                     .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
+            )
+            Text(
+                text = bottomLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
             )
         }
     }
@@ -643,37 +663,84 @@ fun smartStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
     return result
 }
 
-fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 900): Int {
+fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 1600): Int {
     val usableWidth = minOf(top.width, bottom.width)
     val searchHeight = minOf(maxSearch, top.height, bottom.height)
     if (usableWidth <= 0 || searchHeight <= 0) return 0
 
-    val sampleColumns = minOf(80, usableWidth)
+    val sampleColumns = minOf(120, usableWidth)
     val columnStep = maxOf(1, usableWidth / sampleColumns)
 
+    val topSignature = buildRowSignature(top, usableWidth, columnStep, searchHeight, fromBottom = true)
+    val bottomSignature = buildRowSignature(bottom, usableWidth, columnStep, searchHeight, fromBottom = false)
+
     var bestOverlap = 0
-    var bestDiff = Float.MAX_VALUE
+    var bestScore = Float.MAX_VALUE
     for (overlap in 1..searchHeight) {
-        val rowStep = maxOf(1, overlap / 12)
-        var diffSum = 0f
-        var rowsChecked = 0
+        val rowStep = maxOf(1, overlap / 24)
+        var signatureDiff = 0f
+        var signatureSamples = 0
         var rowIndex = 0
+        val topStart = searchHeight - overlap
         while (rowIndex < overlap) {
-            val topRow = top.height - overlap + rowIndex
+            val topRow = topStart + rowIndex
             val bottomRow = rowIndex
-            diffSum += sampledRowDifference(top, bottom, usableWidth, topRow, bottomRow, columnStep)
-            rowsChecked++
+            signatureDiff += abs(topSignature[topRow] - bottomSignature[bottomRow])
+            signatureSamples++
             rowIndex += rowStep
         }
-        if (rowsChecked == 0) continue
-        val normalizedDiff = diffSum / rowsChecked
-        if (normalizedDiff < bestDiff) {
-            bestDiff = normalizedDiff
+        if (signatureSamples == 0) continue
+        val normalizedSignature = signatureDiff / signatureSamples
+
+        val colorDiff = calculateColorBandDifference(top, bottom, usableWidth, overlap, columnStep)
+        val combinedScore = (normalizedSignature * 0.6f) + (colorDiff * 0.4f)
+
+        if (combinedScore < bestScore) {
+            bestScore = combinedScore
             bestOverlap = overlap
         }
     }
 
     return bestOverlap
+}
+
+fun buildRowSignature(bitmap: Bitmap, width: Int, columnStep: Int, sampleHeight: Int, fromBottom: Boolean): FloatArray {
+    val signature = FloatArray(sampleHeight)
+    val pixels = IntArray(width)
+    val startRow = if (fromBottom) bitmap.height - sampleHeight else 0
+    for (index in 0 until sampleHeight) {
+        val row = startRow + index
+        bitmap.getPixels(pixels, 0, width, 0, row, width, 1)
+        var luminanceSum = 0f
+        var samples = 0
+        var columnIndex = 0
+        while (columnIndex < width) {
+            val color = pixels[columnIndex]
+            val r = AndroidColor.red(color)
+            val g = AndroidColor.green(color)
+            val b = AndroidColor.blue(color)
+            luminanceSum += (0.299f * r + 0.587f * g + 0.114f * b) / 255f
+            samples++
+            columnIndex += columnStep
+        }
+        signature[index] = if (samples == 0) 0f else luminanceSum / samples
+    }
+    return signature
+}
+
+fun calculateColorBandDifference(top: Bitmap, bottom: Bitmap, width: Int, overlap: Int, columnStep: Int): Float {
+    var diffSum = 0f
+    var rowsChecked = 0
+    val rowStep = maxOf(1, overlap / 16)
+    var rowIndex = 0
+    while (rowIndex < overlap) {
+        val topRow = top.height - overlap + rowIndex
+        val bottomRow = rowIndex
+        diffSum += sampledRowDifference(top, bottom, width, topRow, bottomRow, columnStep)
+        rowsChecked++
+        rowIndex += rowStep
+    }
+    return if (rowsChecked == 0) Float.MAX_VALUE else diffSum / rowsChecked
 }
 
 fun sampledRowDifference(
