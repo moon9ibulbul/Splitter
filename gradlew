@@ -15,6 +15,15 @@ if [ -f "$PROPERTIES_FILE" ]; then
   distributionUrl=$(sed -n 's/^distributionUrl=//p' "$PROPERTIES_FILE" | tail -n 1 | sed 's#\\:#:#g')
 fi
 
+wrapper_valid() {
+  [ -f "$WRAPPER_JAR" ] || return 1
+  if command -v jar >/dev/null 2>&1; then
+    jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/IDownload.class" || return 1
+    jar tf "$WRAPPER_JAR" 2>/dev/null | grep -q "org/gradle/wrapper/GradleWrapperMain.class" || return 1
+  fi
+  return 0
+}
+
 download_wrapper_from_distribution() {
   tmp_dir=$(mktemp -d 2>/dev/null || mktemp -d -t gradle-wrapper)
   [ -d "$tmp_dir" ] || return 1
@@ -55,10 +64,33 @@ download_wrapper_from_distribution() {
   return 1
 }
 
-if [ ! -f "$WRAPPER_JAR" ]; then
+generate_wrapper_with_gradle() {
+  gradle_cmd=$(command -v gradle || true)
+  [ -n "$gradle_cmd" ] || return 1
+
+  wrapper_version="$1"
+  if [ -z "$wrapper_version" ]; then
+    wrapper_version="$(printf "%s" "$distributionUrl" | sed -n 's#.*gradle-\([0-9][^-/]*\).*#\1#p' | head -n 1)"
+  fi
+
+  if [ -z "$wrapper_version" ]; then
+    "$gradle_cmd" wrapper >/dev/null 2>&1 || return 1
+  else
+    "$gradle_cmd" wrapper --gradle-version "$wrapper_version" >/dev/null 2>&1 || return 1
+  fi
+
+  [ -f "$WRAPPER_JAR" ] || return 1
+  return 0
+}
+
+if ! wrapper_valid; then
   echo "gradle-wrapper.jar missing, downloading from Gradle distribution..." >&2
-  if [ -z "$distributionUrl" ] || ! download_wrapper_from_distribution; then
-    echo "Failed to provision gradle-wrapper.jar; check network access to the Gradle distribution." >&2
+  if [ -n "$distributionUrl" ] && download_wrapper_from_distribution && wrapper_valid; then
+    :
+  elif generate_wrapper_with_gradle; then
+    :
+  else
+    echo "Failed to provision gradle-wrapper.jar; ensure network access to the Gradle distribution or a local Gradle installation." >&2
     exit 1
   fi
 fi
