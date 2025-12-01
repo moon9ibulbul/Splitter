@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -58,8 +59,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -194,9 +197,11 @@ fun SetupScreen(
     onPickImage: () -> Unit,
     onProceed: () -> Unit
 ) {
+    val scrollState = rememberScrollState()
     Column(
         modifier = modifier
             .fillMaxSize()
+            .verticalScroll(scrollState)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -251,7 +256,6 @@ fun SetupScreen(
                 )
             }
         }
-        Spacer(modifier = Modifier.weight(1f))
         Button(onClick = onProceed, modifier = Modifier.fillMaxWidth(), enabled = metadata != null) {
             Text("Potong")
         }
@@ -372,8 +376,9 @@ fun PreviewScreen(
             ) {
                 BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val density = LocalDensity.current
+                    val displayWidth = maxWidth * 0.85f
                     val displayHeight = if (imageBitmap.width > 0) {
-                        maxWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
+                        displayWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
                     } else {
                         0.dp
                     }
@@ -384,13 +389,22 @@ fun PreviewScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(displayHeight)
+                            .background(Color.Black)
+                            .padding(end = 12.dp)
                     ) {
-                        Image(
-                            bitmap = imageBitmap.asImageBitmap(),
-                            contentDescription = "Gambar yang akan dipotong",
-                            contentScale = ContentScale.FillBounds,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        Box(
+                            modifier = Modifier
+                                .width(displayWidth)
+                                .fillMaxHeight()
+                                .align(Alignment.CenterStart)
+                        ) {
+                            Image(
+                                bitmap = imageBitmap.asImageBitmap(),
+                                contentDescription = "Gambar yang akan dipotong",
+                                contentScale = ContentScale.FillBounds,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                         cutPositions.forEachIndexed { index, positionPx ->
                             val displayOffset = positionPx / scale
                             val yOffset = with(density) { displayOffset.toDp() }
@@ -426,9 +440,12 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
             .offset(y = position - 12.dp)
             .height(24.dp)
             .pointerInput(Unit) {
-                detectDragGestures { _, dragAmount ->
-                    onDrag(dragAmount.y)
-                }
+                detectDragGestures(
+                    onDrag = { change, dragAmount ->
+                        change.consumePositionChange()
+                        onDrag(dragAmount.y)
+                    }
+                )
             }
     ) {
         Divider(
@@ -436,7 +453,7 @@ fun SliderOverlay(position: Dp, onDrag: (Float) -> Unit) {
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(),
             thickness = 3.dp,
-            color = MaterialTheme.colorScheme.primaryContainer
+            color = MaterialTheme.colorScheme.secondary
         )
         Box(
             modifier = Modifier
