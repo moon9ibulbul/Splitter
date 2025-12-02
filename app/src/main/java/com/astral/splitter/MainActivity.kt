@@ -42,11 +42,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.Redo
 import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -69,6 +74,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -103,7 +109,14 @@ enum class OutputFormat(val mimeType: String, val extension: String, val compres
     JPEG("image/jpeg", "jpg", Bitmap.CompressFormat.JPEG)
 }
 
-data class ImageMetadata(val uris: List<Uri>, val width: Int, val height: Int)
+data class ImageMetadata(
+    val uris: List<Uri>,
+    val width: Int,
+    val height: Int,
+    val overlaps: List<Int> = emptyList(),
+    val seamPositions: List<Int> = emptyList(),
+    val sourceHeights: List<Int> = emptyList()
+)
 
 data class PreviewState(
     val metadata: ImageMetadata,
@@ -113,7 +126,22 @@ data class PreviewState(
     val bitmap: Bitmap
 )
 
-data class StitchedSelection(val bitmap: Bitmap, val uris: List<Uri>)
+data class StitchedSelection(
+    val bitmap: Bitmap,
+    val uris: List<Uri>,
+    val overlaps: List<Int>,
+    val seamPositions: List<Int>,
+    val sourceHeights: List<Int>
+)
+
+fun StitchedSelection.toMetadata(): ImageMetadata = ImageMetadata(
+    uris = uris,
+    width = bitmap.width,
+    height = bitmap.height,
+    overlaps = overlaps,
+    seamPositions = seamPositions,
+    sourceHeights = sourceHeights
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -140,10 +168,10 @@ fun AstralSplitterApp() {
                 runCatching { stitchSelectedImages(context, uris, smart = false) }
             }
             isLoadingImages = false
-            stitched.onSuccess { selection ->
-                stitchedBitmap = selection.bitmap
-                metadata = ImageMetadata(selection.uris, selection.bitmap.width, selection.bitmap.height)
-            }.onFailure {
+                stitched.onSuccess { selection ->
+                    stitchedBitmap = selection.bitmap
+                    metadata = selection.toMetadata()
+                }.onFailure {
                 stitchedBitmap = null
                 metadata = null
                 showToast(context, it.message ?: "Gagal memuat gambar")
@@ -385,7 +413,54 @@ fun PreviewScreen(
     val coroutineScope = rememberCoroutineScope()
     var isSaving by remember { mutableStateOf(false) }
     var isSmartProcessing by remember { mutableStateOf(false) }
+    var isRestitching by remember { mutableStateOf(false) }
+    var isEditingStitch by remember { mutableStateOf(false) }
+    var activeSeamIndex by remember { mutableStateOf<Int?>(null) }
+    var topAnchor by remember { mutableStateOf(0f) }
+    var bottomAnchor by remember { mutableStateOf(0f) }
     val cutPositions = remember(state.metadata, state.cutPositions) { mutableStateListOf<Float>().apply { addAll(state.cutPositions) } }
+    val seamOverlaps = remember(state.metadata) {
+        val expected = (state.metadata.uris.size - 1).coerceAtLeast(0)
+        val existing = if (state.metadata.overlaps.isEmpty() && expected > 0) List(expected) { 0 } else state.metadata.overlaps
+        mutableStateListOf<Int>().apply {
+            addAll(existing.take(expected))
+            repeat((expected - existing.size).coerceAtLeast(0)) { add(0) }
+        }
+    }
+
+    fun applyOverlaps(updatedOverlaps: List<Int>, successMessage: String) {
+        if (updatedOverlaps.size != (state.metadata.uris.size - 1).coerceAtLeast(0)) {
+            snackbarHostState.showSnackbar("Jumlah titik sambungan tidak sesuai")
+            return
+        }
+        coroutineScope.launch {
+            isRestitching = true
+            val stitched = withContext(Dispatchers.IO) {
+                runCatching {
+                    stitchSelectedImages(
+                        context = context,
+                        uris = state.metadata.uris,
+                        smart = false,
+                        customOverlaps = updatedOverlaps
+                    )
+                }
+            }
+            isRestitching = false
+            stitched.onSuccess { selection ->
+                val scale = selection.bitmap.height.toFloat() / state.bitmap.height.toFloat()
+                val newCuts = cutPositions.map { it * scale }
+                val updatedState = state.copy(
+                    metadata = selection.toMetadata(),
+                    cutPositions = newCuts,
+                    bitmap = selection.bitmap
+                )
+                onStateChange(updatedState)
+                snackbarHostState.showSnackbar(successMessage)
+            }.onFailure {
+                snackbarHostState.showSnackbar(it.message ?: "Gagal memperbarui sambungan")
+            }
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -445,35 +520,50 @@ fun PreviewScreen(
                 .fillMaxSize()
         ) {
             if (state.metadata.uris.size > 1) {
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            isSmartProcessing = true
-                            val stitched = withContext(Dispatchers.IO) {
-                                runCatching { stitchSelectedImages(context, state.metadata.uris, smart = true) }
-                            }
-                            isSmartProcessing = false
-                            stitched.onSuccess { selection ->
-                                val scale = selection.bitmap.height.toFloat() / state.bitmap.height.toFloat()
-                                val newCuts = cutPositions.map { it * scale }
-                                val updatedState = state.copy(
-                                    metadata = ImageMetadata(selection.uris, selection.bitmap.width, selection.bitmap.height),
-                                    cutPositions = newCuts,
-                                    bitmap = selection.bitmap
-                                )
-                                onStateChange(updatedState)
-                                snackbarHostState.showSnackbar("Smart stitch selesai")
-                            }.onFailure {
-                                snackbarHostState.showSnackbar(it.message ?: "Smart stitch gagal")
-                            }
-                        }
-                    },
-                    enabled = !isSaving && !isSmartProcessing,
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(if (isSmartProcessing) "Memproses Smart Stitch..." else "Smart Stitch")
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                isSmartProcessing = true
+                                val stitched = withContext(Dispatchers.IO) {
+                                    runCatching { stitchSelectedImages(context, state.metadata.uris, smart = true) }
+                                }
+                                isSmartProcessing = false
+                                stitched.onSuccess { selection ->
+                                    val scale = selection.bitmap.height.toFloat() / state.bitmap.height.toFloat()
+                                    val newCuts = cutPositions.map { it * scale }
+                                    val updatedState = state.copy(
+                                        metadata = selection.toMetadata(),
+                                        cutPositions = newCuts,
+                                        bitmap = selection.bitmap
+                                    )
+                                    onStateChange(updatedState)
+                                    snackbarHostState.showSnackbar("Smart stitch selesai")
+                                }.onFailure {
+                                    snackbarHostState.showSnackbar(it.message ?: "Smart stitch gagal")
+                                }
+                            }
+                        },
+                        enabled = !isSaving && !isSmartProcessing && !isRestitching,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isSmartProcessing) "Memproses Smart Stitch..." else "Smart Stitch")
+                    }
+                    Button(
+                        onClick = {
+                            activeSeamIndex = null
+                            isEditingStitch = !isEditingStitch
+                        },
+                        enabled = !isSaving && !isSmartProcessing && !isRestitching,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isEditingStitch) "Selesai Edit Stitch" else "Edit Stitch Point")
+                    }
                 }
             }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -501,6 +591,9 @@ fun PreviewScreen(
                         val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1]
                         (next - cut).coerceAtLeast(0f)
                     }
+                }
+                val seamPositions = remember(state.metadata.seamPositions, imageBitmap.height) {
+                    state.metadata.seamPositions
                 }
 
                 Box(
@@ -534,32 +627,91 @@ fun PreviewScreen(
                             modifier = Modifier.fillMaxSize()
                         )
                     }
-                    cutPositions.forEachIndexed { index, positionPx ->
-                        val displayOffset = positionPx / scale
-                        val yOffset = with(density) { displayOffset.toDp() }
-                        val topLabel = "${sliderTopHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
-                        val bottomLabel = "${sliderBottomHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
-                        SliderOverlay(
-                            position = yOffset,
-                            topLabel = topLabel,
-                            bottomLabel = bottomLabel,
-                            onDrag = { deltaPx ->
-                                val imageDelta = deltaPx * scale
-                                val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
-                                val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
-                                val updated = (positionPx + imageDelta).coerceIn(previous, next)
-                                cutPositions[index] = updated
+                    if (isEditingStitch) {
+                        seamPositions.forEachIndexed { index, seamStart ->
+                            val displayOffset = seamStart / scale
+                            val yOffset = with(density) { displayOffset.toDp() }
+                            val topLimit = state.metadata.sourceHeights.getOrNull(index)?.coerceAtMost(2000) ?: 0
+                            val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1)?.coerceAtMost(2000) ?: 0
+                            val onStartEdit = {
+                                activeSeamIndex = index
+                                val currentOverlap = seamOverlaps.getOrNull(index)?.coerceAtLeast(0) ?: 0
+                                val defaultTop = (currentOverlap / 2f).coerceIn(0f, topLimit.toFloat())
+                                topAnchor = defaultTop
+                                bottomAnchor = (currentOverlap - defaultTop).coerceIn(0f, bottomLimit.toFloat())
                             }
-                        )
+                            val onRedo = {
+                                val updated = seamOverlaps.toMutableList()
+                                updated[index] = 0
+                                seamOverlaps[index] = 0
+                                applyOverlaps(updated, "Sambungan direset")
+                                activeSeamIndex = null
+                            }
+                            val onConfirm = {
+                                val maxOverlap = minOf(topLimit, bottomLimit)
+                                val overlapValue = (topAnchor + bottomAnchor).roundToInt().coerceIn(0, maxOverlap)
+                                val updated = seamOverlaps.toMutableList()
+                                updated[index] = overlapValue
+                                seamOverlaps[index] = overlapValue
+                                applyOverlaps(updated, "Posisi sambungan diperbarui")
+                                activeSeamIndex = null
+                            }
+                            SeamMarker(
+                                position = yOffset,
+                                isActive = activeSeamIndex == index,
+                                topValue = topAnchor.coerceAtMost(topLimit.toFloat()),
+                                bottomValue = bottomAnchor.coerceAtMost(bottomLimit.toFloat()),
+                                topRange = 0f..topLimit.toFloat(),
+                                bottomRange = 0f..bottomLimit.toFloat(),
+                                isBusy = isRestitching || isSmartProcessing || isSaving,
+                                onStartEdit = onStartEdit,
+                                onRedo = onRedo,
+                                onCancel = {
+                                    activeSeamIndex = null
+                                    topAnchor = 0f
+                                    bottomAnchor = 0f
+                                },
+                                onConfirm = onConfirm,
+                                onTopChange = { topAnchor = it },
+                                onBottomChange = { bottomAnchor = it }
+                            )
+                        }
+                    } else {
+                        cutPositions.forEachIndexed { index, positionPx ->
+                            val displayOffset = positionPx / scale
+                            val yOffset = with(density) { displayOffset.toDp() }
+                            val topLabel = "${sliderTopHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                            val bottomLabel = "${sliderBottomHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                            SliderOverlay(
+                                position = yOffset,
+                                topLabel = topLabel,
+                                bottomLabel = bottomLabel,
+                                onDrag = { deltaPx ->
+                                    val imageDelta = deltaPx * scale
+                                    val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
+                                    val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
+                                    val updated = (positionPx + imageDelta).coerceIn(previous, next)
+                                    cutPositions[index] = updated
+                                }
+                            )
+                        }
                     }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Geser garis untuk mengatur posisi potong. Total bagian: ${cutPositions.size + 1}",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
+            if (isEditingStitch) {
+                Text(
+                    text = "Gunakan ikon gunting di tiap sambungan untuk mengatur titik potong antar gambar.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            } else {
+                Text(
+                    text = "Geser garis untuk mengatur posisi potong. Total bagian: ${cutPositions.size + 1}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
         }
     }
 }
@@ -621,15 +773,97 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
     }
 }
 
-fun stitchSelectedImages(context: Context, uris: List<Uri>, smart: Boolean): StitchedSelection {
+@Composable
+fun SeamMarker(
+    position: Dp,
+    isActive: Boolean,
+    topValue: Float,
+    bottomValue: Float,
+    topRange: ClosedFloatingPointRange<Float>,
+    bottomRange: ClosedFloatingPointRange<Float>,
+    isBusy: Boolean,
+    onStartEdit: () -> Unit,
+    onRedo: () -> Unit,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    onTopChange: (Float) -> Unit,
+    onBottomChange: (Float) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset(y = position - 56.dp)
+            .height(120.dp)
+    ) {
+        Divider(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxWidth(),
+            thickness = 3.dp,
+            color = MaterialTheme.colorScheme.tertiary
+        )
+        Column(
+            modifier = Modifier.align(Alignment.CenterEnd),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (isActive) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(onClick = onConfirm, enabled = !isBusy) {
+                        Icon(imageVector = Icons.Filled.Check, contentDescription = "Simpan titik sambungan")
+                    }
+                    IconButton(onClick = onCancel, enabled = !isBusy) {
+                        Icon(imageVector = Icons.Filled.Close, contentDescription = "Batalkan editing")
+                    }
+                }
+                Slider(
+                    value = topValue,
+                    onValueChange = onTopChange,
+                    valueRange = topRange,
+                    enabled = !isBusy,
+                    modifier = Modifier
+                        .height(42.dp)
+                        .width(180.dp)
+                        .rotate(-90f)
+                )
+                Slider(
+                    value = bottomValue,
+                    onValueChange = onBottomChange,
+                    valueRange = bottomRange,
+                    enabled = !isBusy,
+                    modifier = Modifier
+                        .height(42.dp)
+                        .width(180.dp)
+                        .rotate(-90f)
+                )
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    IconButton(onClick = onStartEdit, enabled = !isBusy) {
+                        Icon(imageVector = Icons.Filled.ContentCut, contentDescription = "Edit titik sambungan")
+                    }
+                    IconButton(onClick = onRedo, enabled = !isBusy) {
+                        Icon(imageVector = Icons.Filled.Redo, contentDescription = "Reset titik sambungan")
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun stitchSelectedImages(
+    context: Context,
+    uris: List<Uri>,
+    smart: Boolean,
+    customOverlaps: List<Int>? = null
+): StitchedSelection {
     if (uris.isEmpty()) throw IllegalArgumentException("Tidak ada gambar yang dipilih")
     val bitmaps = uris.map { uri -> decodeBitmapSoft(context, uri) }
-    val stitched = if (smart && uris.size > 1) {
-        smartStitchBitmaps(bitmaps)
+    val overlaps = customOverlaps ?: if (smart && uris.size > 1) {
+        smartStitchPlan(bitmaps)
     } else {
-        simpleStitchBitmaps(bitmaps)
+        List(bitmaps.size - 1) { 0 }
     }
-    return StitchedSelection(stitched, uris)
+    return buildStitchedSelection(bitmaps, uris, overlaps)
 }
 
 fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
@@ -640,35 +874,15 @@ fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
     }
 }
 
-fun simpleStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
+fun buildStitchedSelection(bitmaps: List<Bitmap>, uris: List<Uri>, overlaps: List<Int>): StitchedSelection {
     require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
-    if (bitmaps.size == 1) return bitmaps.first()
+    if (bitmaps.size == 1) return StitchedSelection(bitmaps.first(), uris, emptyList(), emptyList(), listOf(bitmaps.first().height))
+    require(overlaps.size == bitmaps.size - 1) { "Jumlah overlap tidak sesuai" }
 
-    val totalHeight = bitmaps.sumOf { it.height }
-    val maxWidth = bitmaps.maxOf { it.width }
-    val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(result)
-
-    var yOffset = 0
-    bitmaps.forEach { bitmap ->
-        canvas.drawBitmap(bitmap, 0f, yOffset.toFloat(), null)
-        yOffset += bitmap.height
-    }
-    return result
-}
-
-fun smartStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
-    require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
-    if (bitmaps.size == 1) return bitmaps.first()
-
-    val overlaps = MutableList(bitmaps.size) { 0 }
-    for (index in 1 until bitmaps.size) {
-        overlaps[index] = findVerticalOverlap(bitmaps[index - 1], bitmaps[index])
-    }
-
+    val seamPositions = mutableListOf<Int>()
     var totalHeight = bitmaps.first().height
     for (index in 1 until bitmaps.size) {
-        totalHeight += bitmaps[index].height - overlaps[index]
+        totalHeight += bitmaps[index].height - overlaps[index - 1]
     }
     val maxWidth = bitmaps.maxOf { it.width }
     val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
@@ -677,10 +891,23 @@ fun smartStitchBitmaps(bitmaps: List<Bitmap>): Bitmap {
     var yOffset = 0
     canvas.drawBitmap(bitmaps.first(), 0f, yOffset.toFloat(), null)
     for (index in 1 until bitmaps.size) {
-        yOffset += bitmaps[index - 1].height - overlaps[index]
+        yOffset += bitmaps[index - 1].height - overlaps[index - 1]
+        seamPositions.add(yOffset)
         canvas.drawBitmap(bitmaps[index], 0f, yOffset.toFloat(), null)
     }
-    return result
+    val sourceHeights = bitmaps.map { it.height }
+    return StitchedSelection(result, uris, overlaps, seamPositions, sourceHeights)
+}
+
+fun smartStitchPlan(bitmaps: List<Bitmap>): List<Int> {
+    require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
+    if (bitmaps.size == 1) return emptyList()
+
+    val overlaps = MutableList(bitmaps.size - 1) { 0 }
+    for (index in 1 until bitmaps.size) {
+        overlaps[index - 1] = findVerticalOverlap(bitmaps[index - 1], bitmaps[index])
+    }
+    return overlaps
 }
 
 fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 1600): Int {
@@ -713,7 +940,9 @@ fun findVerticalOverlap(top: Bitmap, bottom: Bitmap, maxSearch: Int = 1600): Int
         val normalizedSignature = signatureDiff / signatureSamples
 
         val colorDiff = calculateColorBandDifference(top, bottom, usableWidth, overlap, columnStep)
-        val combinedScore = (normalizedSignature * 0.6f) + (colorDiff * 0.4f)
+        val edgeDiff = calculateEdgeDifference(top, bottom, usableWidth, overlap, columnStep)
+        val texturePenalty = calculateTexturePenalty(topSignature, bottomSignature, topStart, overlap)
+        val combinedScore = (normalizedSignature * 0.45f) + (colorDiff * 0.3f) + (edgeDiff * 0.2f) + texturePenalty
 
         if (combinedScore < bestScore) {
             bestScore = combinedScore
@@ -798,6 +1027,43 @@ fun calculateColorBandDifference(top: Bitmap, bottom: Bitmap, width: Int, overla
     return if (rowsChecked == 0) Float.MAX_VALUE else diffSum / rowsChecked
 }
 
+fun calculateEdgeDifference(top: Bitmap, bottom: Bitmap, width: Int, overlap: Int, columnStep: Int): Float {
+    var diffSum = 0f
+    var rowsChecked = 0
+    val rowStep = maxOf(1, overlap / 14)
+    var rowIndex = 0
+    while (rowIndex < overlap) {
+        val topRow = top.height - overlap + rowIndex
+        val bottomRow = rowIndex
+        diffSum += sampledEdgeDifference(top, bottom, width, topRow, bottomRow, columnStep)
+        rowsChecked++
+        rowIndex += rowStep
+    }
+    return if (rowsChecked == 0) Float.MAX_VALUE else diffSum / rowsChecked
+}
+
+fun calculateTexturePenalty(
+    topSignature: FloatArray,
+    bottomSignature: FloatArray,
+    topStart: Int,
+    overlap: Int
+): Float {
+    if (overlap <= 4) return 0f
+    var textureGap = 0f
+    var samples = 0
+    var rowIndex = 1
+    while (rowIndex < overlap) {
+        val topDelta = abs(topSignature[topStart + rowIndex] - topSignature[topStart + rowIndex - 1])
+        val bottomDelta = abs(bottomSignature[rowIndex] - bottomSignature[rowIndex - 1])
+        textureGap += abs(topDelta - bottomDelta)
+        samples++
+        rowIndex++
+    }
+    if (samples == 0) return 0f
+    val normalizedGap = textureGap / samples
+    return (normalizedGap * 0.35f).coerceAtMost(0.35f)
+}
+
 fun sampledRowDifference(
     top: Bitmap,
     bottom: Bitmap,
@@ -825,6 +1091,38 @@ fun sampledRowDifference(
     }
     if (samples == 0) return Float.MAX_VALUE
     return diff.toFloat() / (samples * 3 * 255f)
+}
+
+fun sampledEdgeDifference(
+    top: Bitmap,
+    bottom: Bitmap,
+    width: Int,
+    topY: Int,
+    bottomY: Int,
+    columnStep: Int
+): Float {
+    val topRow = IntArray(width)
+    val bottomRow = IntArray(width)
+    top.getPixels(topRow, 0, width, 0, topY, width, 1)
+    bottom.getPixels(bottomRow, 0, width, 0, bottomY, width, 1)
+
+    var diff = 0f
+    var samples = 0
+    var columnIndex = columnStep
+    while (columnIndex < width) {
+        val prev = columnIndex - columnStep
+        val topEdge = abs(AndroidColor.red(topRow[columnIndex]) - AndroidColor.red(topRow[prev])) +
+            abs(AndroidColor.green(topRow[columnIndex]) - AndroidColor.green(topRow[prev])) +
+            abs(AndroidColor.blue(topRow[columnIndex]) - AndroidColor.blue(topRow[prev]))
+        val bottomEdge = abs(AndroidColor.red(bottomRow[columnIndex]) - AndroidColor.red(bottomRow[prev])) +
+            abs(AndroidColor.green(bottomRow[columnIndex]) - AndroidColor.green(bottomRow[prev])) +
+            abs(AndroidColor.blue(bottomRow[columnIndex]) - AndroidColor.blue(bottomRow[prev]))
+        diff += abs(topEdge - bottomEdge)
+        samples++
+        columnIndex += columnStep
+    }
+    if (samples == 0) return Float.MAX_VALUE
+    return diff / (samples * 255f * 3f)
 }
 
 suspend fun performCuts(
