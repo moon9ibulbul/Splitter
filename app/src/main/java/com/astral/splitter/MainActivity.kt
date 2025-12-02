@@ -430,7 +430,9 @@ fun PreviewScreen(
 
     fun applyOverlaps(updatedOverlaps: List<Int>, successMessage: String) {
         if (updatedOverlaps.size != (state.metadata.uris.size - 1).coerceAtLeast(0)) {
-            snackbarHostState.showSnackbar("Jumlah titik sambungan tidak sesuai")
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Jumlah titik sambungan tidak sesuai")
+            }
             return
         }
         coroutineScope.launch {
