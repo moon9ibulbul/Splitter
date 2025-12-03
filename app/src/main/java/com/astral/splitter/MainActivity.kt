@@ -3,7 +3,7 @@ package com.astral.splitter
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Color as AndroidColor
 import android.graphics.ImageDecoder
 import android.net.Uri
@@ -16,6 +16,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,8 +70,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -723,22 +728,26 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = position - 48.dp)
-            .height(96.dp)
+            .offset(y = position - 64.dp)
+            .height(128.dp)
             .draggable(
                 orientation = Orientation.Vertical,
                 state = rememberDraggableState { delta -> onDrag(delta) }
             )
     ) {
-        Divider(
+        Column(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(),
-            thickness = 3.dp,
-            color = MaterialTheme.colorScheme.secondary
-        )
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            SplitHandleBar(direction = HandleDirection.Up)
+            SplitHandleBar(direction = HandleDirection.Down)
+        }
         Column(
-            modifier = Modifier.align(Alignment.CenterEnd),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -754,17 +763,20 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
             )
             Box(
                 modifier = Modifier
-                    .padding(top = 6.dp)
-                    .size(36.dp)
-                    .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
+                    .padding(top = 8.dp)
+                    .size(width = 44.dp, height = 40.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
             )
             Text(
                 text = bottomLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
-                    .padding(top = 6.dp)
+                    .padding(top = 8.dp)
                     .background(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(6.dp)
@@ -774,6 +786,58 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
         }
     }
 }
+
+@Composable
+private fun SplitHandleBar(
+    direction: HandleDirection,
+    modifier: Modifier = Modifier
+) {
+    val color = MaterialTheme.colorScheme.secondary
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(32.dp)
+            .padding(horizontal = 4.dp)
+    ) {
+        val strokeWidth = 4.dp.toPx()
+        val barY = size.height / 2f
+        val centerX = size.width / 2f
+        val handleWidth = 48.dp.toPx()
+        val handleHeight = 16.dp.toPx()
+        val connectorHeight = 8.dp.toPx()
+
+        drawLine(
+            color = color,
+            start = Offset(0f, barY),
+            end = Offset(size.width, barY),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round
+        )
+
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(
+                centerX - handleWidth / 2,
+                if (direction == HandleDirection.Up) barY - strokeWidth / 2 - handleHeight - connectorHeight
+                else barY + strokeWidth / 2 + connectorHeight
+            ),
+            size = Size(handleWidth, handleHeight),
+            cornerRadius = CornerRadius(x = handleHeight / 2, y = handleHeight / 2)
+        )
+
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(
+                centerX - strokeWidth,
+                if (direction == HandleDirection.Up) barY - connectorHeight - strokeWidth / 2 else barY + strokeWidth / 2
+            ),
+            size = Size(strokeWidth * 2, connectorHeight),
+            cornerRadius = CornerRadius(x = strokeWidth, y = strokeWidth)
+        )
+    }
+}
+
+private enum class HandleDirection { Up, Down }
 
 @Composable
 fun SeamMarker(
@@ -888,7 +952,7 @@ fun buildStitchedSelection(bitmaps: List<Bitmap>, uris: List<Uri>, overlaps: Lis
     }
     val maxWidth = bitmaps.maxOf { it.width }
     val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(result)
+    val canvas = AndroidCanvas(result)
 
     var yOffset = 0
     canvas.drawBitmap(bitmaps.first(), 0f, yOffset.toFloat(), null)
