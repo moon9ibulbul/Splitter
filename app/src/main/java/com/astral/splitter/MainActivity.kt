@@ -622,24 +622,26 @@ fun PreviewScreen(
                                 .padding(8.dp)
                         )
                     }
-                    Box(
-                        modifier = Modifier
-                            .width(displayWidth)
-                            .fillMaxHeight()
-                            .align(Alignment.CenterStart)
-                    ) {
+                    val imageAreaModifier = Modifier
+                        .width(displayWidth)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+
+                    Box(modifier = imageAreaModifier) {
                         Image(
                             bitmap = imageBitmap.asImageBitmap(),
                             contentDescription = "Gambar yang akan dipotong",
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier.fillMaxSize()
                         )
-                        if (isEditingStitch) {
+                    }
+                    if (isEditingStitch) {
+                        Box(modifier = Modifier.matchParentSize()) {
                             seamPositions.forEachIndexed { index, seamStart ->
                                 val displayOffset = seamStart / scale
                                 val yOffset = with(density) { displayOffset.toDp() }
-                                val topLimit = state.metadata.sourceHeights.getOrNull(index)?.coerceAtMost(2000) ?: 0
-                                val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1)?.coerceAtMost(2000) ?: 0
+                                val topLimit = state.metadata.sourceHeights.getOrNull(index) ?: 0
+                                val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1) ?: 0
                                 val onStartEdit = {
                                     activeSeamIndex = index
                                     topAnchor = 0f
@@ -670,6 +672,8 @@ fun PreviewScreen(
                                     bottomRange = 0f..bottomLimit.toFloat(),
                                     scale = scale,
                                     isBusy = isRestitching || isSmartProcessing || isSaving,
+                                    sliderWidth = displayWidth,
+                                    sideSpace = (maxWidth - displayWidth).coerceAtLeast(0.dp),
                                     onStartEdit = onStartEdit,
                                     onRedo = onRedo,
                                     onCancel = {
@@ -682,7 +686,9 @@ fun PreviewScreen(
                                     onBottomChange = { bottomAnchor = it }
                                 )
                             }
-                        } else {
+                        }
+                    } else {
+                        Box(modifier = imageAreaModifier) {
                             cutPositions.forEachIndexed { index, positionPx ->
                                 val displayOffset = positionPx / scale
                                 val yOffset = with(density) { displayOffset.toDp() }
@@ -804,7 +810,8 @@ private fun SplitHandleBar(
             start = Offset(0f, barY),
             end = Offset(size.width, barY),
             strokeWidth = strokeWidth,
-            cap = StrokeCap.Round
+            cap = StrokeCap.Round,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
         )
 
         drawRoundRect(
@@ -842,6 +849,8 @@ fun SeamMarker(
     bottomRange: ClosedFloatingPointRange<Float>,
     scale: Float,
     isBusy: Boolean,
+    sliderWidth: Dp,
+    sideSpace: Dp,
     onStartEdit: () -> Unit,
     onRedo: () -> Unit,
     onCancel: () -> Unit,
@@ -862,13 +871,12 @@ fun SeamMarker(
             .offset(y = position - centerY)
             .height(sliderHeight)
     ) {
-        if (isActive) {
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f),
-                    verticalArrangement = Arrangement.Center
-                ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(modifier = Modifier.width(sliderWidth)) {
+                if (isActive) {
                     ManualSeamSlider(
                         topValue = topValue,
                         bottomValue = bottomValue,
@@ -882,13 +890,19 @@ fun SeamMarker(
                         onBottomChange = onBottomChange
                     )
                 }
-                Column(
-                    modifier = Modifier
-                        .width(120.dp)
-                        .fillMaxHeight(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
+            }
+            val remainingSide = (sideSpace - 120.dp).coerceAtLeast(0.dp)
+            if (remainingSide > 0.dp) {
+                Spacer(modifier = Modifier.width(remainingSide))
+            }
+            Column(
+                modifier = Modifier
+                    .width(120.dp)
+                    .fillMaxHeight(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                if (isActive) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         IconButton(onClick = onConfirm, enabled = !isBusy) {
                             Icon(
@@ -905,25 +919,23 @@ fun SeamMarker(
                             )
                         }
                     }
-                }
-            }
-        } else {
-            Divider(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxWidth(),
-                thickness = 3.dp,
-                color = MaterialTheme.colorScheme.tertiary
-            )
-            Row(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                IconButton(onClick = onStartEdit, enabled = !isBusy) {
-                    Icon(imageVector = Icons.Filled.ContentCut, contentDescription = "Edit titik sambungan")
-                }
-                IconButton(onClick = onRedo, enabled = !isBusy) {
-                    Icon(imageVector = Icons.Filled.Redo, contentDescription = "Reset titik sambungan")
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        IconButton(onClick = onStartEdit, enabled = !isBusy) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCut,
+                                contentDescription = "Edit titik sambungan",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = onRedo, enabled = !isBusy) {
+                            Icon(
+                                imageVector = Icons.Filled.Redo,
+                                contentDescription = "Reset titik sambungan",
+                                tint = Color.White
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -975,13 +987,25 @@ private fun ManualSeamSlider(
                 .padding(horizontal = 6.dp)
         ) {
             val center = with(density) { centerY.toPx() }
+            val topOffsetPx = with(density) { topOffset.toPx() }
+            val bottomOffsetPx = with(density) { bottomOffset.toPx() }
+            val handleHeightPx = with(density) { handleHeight.toPx() }
+            val shadedStart = center - topOffsetPx + handleHeightPx / 2
+            val shadedEnd = center + bottomOffsetPx - handleHeightPx / 2
+            if (shadedEnd > shadedStart) {
+                drawRect(
+                    color = Color.Black.copy(alpha = 0.35f),
+                    topLeft = Offset(0f, shadedStart),
+                    size = Size(size.width, shadedEnd - shadedStart)
+                )
+            }
             drawLine(
                 color = lineColor,
                 start = Offset(0f, center),
                 end = Offset(size.width, center),
                 strokeWidth = 4.dp.toPx(),
                 cap = StrokeCap.Round,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f))
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
             )
         }
 
