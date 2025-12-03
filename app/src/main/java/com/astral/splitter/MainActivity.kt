@@ -53,6 +53,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -645,8 +646,10 @@ fun PreviewScreen(
                                 val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1) ?: 0
                                 val onStartEdit = {
                                     activeSeamIndex = index
-                                    topAnchor = 0f
-                                    bottomAnchor = 0f
+                                    val existingOverlap = seamOverlaps.getOrNull(index)?.toFloat() ?: 0f
+                                    val suggestedTop = (existingOverlap / 2f).coerceAtMost(topLimit.toFloat())
+                                    topAnchor = suggestedTop
+                                    bottomAnchor = (existingOverlap - suggestedTop).coerceIn(0f, bottomLimit.toFloat())
                                 }
                                 val onRedo = {
                                     val updated = seamOverlaps.toMutableList()
@@ -899,41 +902,72 @@ fun SeamMarker(
             Column(
                 modifier = Modifier
                     .width(120.dp)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .padding(6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isActive) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        IconButton(onClick = onConfirm, enabled = !isBusy) {
+                        IconButton(
+                            onClick = onConfirm,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Check,
                                 contentDescription = "Simpan titik sambungan",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
-                        IconButton(onClick = onCancel, enabled = !isBusy) {
+                        IconButton(
+                            onClick = onCancel,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Close,
                                 contentDescription = "Batalkan editing",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        IconButton(onClick = onStartEdit, enabled = !isBusy) {
+                        IconButton(
+                            onClick = onStartEdit,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.ContentCut,
                                 contentDescription = "Edit titik sambungan",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
-                        IconButton(onClick = onRedo, enabled = !isBusy) {
+                        IconButton(
+                            onClick = onRedo,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        ) {
                             Icon(
                                 imageVector = Icons.Filled.Redo,
                                 contentDescription = "Reset titik sambungan",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -985,14 +1019,12 @@ private fun ManualSeamSlider(
         Canvas(
             modifier = Modifier
                 .matchParentSize()
-                .padding(horizontal = 6.dp)
         ) {
             val center = with(density) { centerY.toPx() }
             val topOffsetPx = with(density) { topOffset.toPx() }
             val bottomOffsetPx = with(density) { bottomOffset.toPx() }
-            val handleHeightPx = with(density) { handleHeight.toPx() }
-            val shadedStart = center - topOffsetPx + handleHeightPx / 2
-            val shadedEnd = center + bottomOffsetPx - handleHeightPx / 2
+            val shadedStart = center - topOffsetPx
+            val shadedEnd = center + bottomOffsetPx
             if (shadedEnd > shadedStart) {
                 drawRect(
                     color = Color.Black.copy(alpha = 0.35f),
