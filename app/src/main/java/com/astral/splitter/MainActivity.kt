@@ -800,9 +800,8 @@ private fun SplitHandleBar(
         modifier = modifier
             .fillMaxWidth()
             .height(32.dp)
-            .padding(horizontal = 4.dp)
     ) {
-        val strokeWidth = 4.dp.toPx()
+        val strokeWidth = 2.dp.toPx()
         val barY = size.height / 2f
         val centerX = size.width / 2f
         val handleWidth = 48.dp.toPx()
@@ -815,7 +814,7 @@ private fun SplitHandleBar(
             end = Offset(size.width, barY),
             strokeWidth = strokeWidth,
             cap = StrokeCap.Round,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f))
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f))
         )
 
         drawRoundRect(
@@ -899,9 +898,10 @@ fun SeamMarker(
             if (remainingSide > 0.dp) {
                 Spacer(modifier = Modifier.width(remainingSide))
             }
+            val actionPanelWidth = if (sideSpace > 0.dp) sideSpace.coerceAtMost(120.dp) else 120.dp
             Column(
                 modifier = Modifier
-                    .width(120.dp)
+                    .width(actionPanelWidth)
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
@@ -910,19 +910,21 @@ fun SeamMarker(
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isActive) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         IconButton(
                             onClick = onConfirm,
                             enabled = !isBusy,
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                 contentColor = MaterialTheme.colorScheme.onSurface
-                            )
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Check,
                                 contentDescription = "Simpan titik sambungan",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                         IconButton(
@@ -931,29 +933,33 @@ fun SeamMarker(
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                 contentColor = MaterialTheme.colorScheme.onSurface
-                            )
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Close,
                                 contentDescription = "Batalkan editing",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         IconButton(
                             onClick = onStartEdit,
                             enabled = !isBusy,
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                 contentColor = MaterialTheme.colorScheme.onSurface
-                            )
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.ContentCut,
                                 contentDescription = "Edit titik sambungan",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                         IconButton(
@@ -962,12 +968,14 @@ fun SeamMarker(
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                 contentColor = MaterialTheme.colorScheme.onSurface
-                            )
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.Redo,
                                 contentDescription = "Reset titik sambungan",
-                                tint = MaterialTheme.colorScheme.onSurface
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -997,8 +1005,6 @@ private fun ManualSeamSlider(
 
     val topOffset = with(density) { (topValue / scale).toDp() }.coerceIn(0.dp, topLimit)
     val bottomOffset = with(density) { (bottomValue / scale).toDp() }.coerceIn(0.dp, bottomLimit)
-
-    val lineColor = MaterialTheme.colorScheme.tertiary
 
     val topDragState = rememberDraggableState { delta ->
         if (!enabled) return@rememberDraggableState
@@ -1032,14 +1038,6 @@ private fun ManualSeamSlider(
                     size = Size(size.width, shadedEnd - shadedStart)
                 )
             }
-            drawLine(
-                color = lineColor,
-                start = Offset(0f, center),
-                end = Offset(size.width, center),
-                strokeWidth = 4.dp.toPx(),
-                cap = StrokeCap.Round,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
-            )
         }
 
         SplitHandleBar(
