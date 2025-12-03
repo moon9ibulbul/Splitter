@@ -74,7 +74,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.alpha
@@ -86,7 +85,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.astral.splitter.ui.theme.AstralSplitterTheme
 import kotlinx.coroutines.Dispatchers
@@ -670,6 +668,7 @@ fun PreviewScreen(
                                 bottomValue = bottomAnchor.coerceAtMost(bottomLimit.toFloat()),
                                 topRange = 0f..topLimit.toFloat(),
                                 bottomRange = 0f..bottomLimit.toFloat(),
+                                scale = scale,
                                 isBusy = isRestitching || isSmartProcessing || isSaving,
                                 onStartEdit = onStartEdit,
                                 onRedo = onRedo,
@@ -847,6 +846,7 @@ fun SeamMarker(
     bottomValue: Float,
     topRange: ClosedFloatingPointRange<Float>,
     bottomRange: ClosedFloatingPointRange<Float>,
+    scale: Float,
     isBusy: Boolean,
     onStartEdit: () -> Unit,
     onRedo: () -> Unit,
@@ -859,32 +859,24 @@ fun SeamMarker(
         modifier = Modifier
             .fillMaxWidth()
             .offset(y = position - 56.dp)
-            .height(168.dp)
+            .height(200.dp)
     ) {
         if (isActive) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 12.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
+                        .weight(1f),
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    SeamHandleSegment(
-                        label = "Atas",
-                        value = topValue,
-                        valueRange = topRange,
-                        color = MaterialTheme.colorScheme.tertiary,
+                    ManualSeamSlider(
+                        topValue = topValue,
+                        bottomValue = bottomValue,
+                        topRange = topRange,
+                        bottomRange = bottomRange,
+                        scale = scale,
                         enabled = !isBusy,
-                        onValueChange = onTopChange
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    SeamHandleSegment(
-                        label = "Bawah",
-                        value = bottomValue,
-                        valueRange = bottomRange,
-                        color = MaterialTheme.colorScheme.tertiary,
-                        enabled = !isBusy,
-                        onValueChange = onBottomChange
+                        onTopChange = onTopChange,
+                        onBottomChange = onBottomChange
                     )
                 }
                 Column(
@@ -911,7 +903,7 @@ fun SeamMarker(
                         }
                     }
                     Text(
-                        text = "Seret garis atas/bawah untuk geser sambungan",
+                        text = "Seret handle atas/bawah untuk geser sambungan",
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
@@ -942,86 +934,113 @@ fun SeamMarker(
 }
 
 @Composable
-private fun SeamHandleSegment(
-    label: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    color: Color,
+private fun ManualSeamSlider(
+    topValue: Float,
+    bottomValue: Float,
+    topRange: ClosedFloatingPointRange<Float>,
+    bottomRange: ClosedFloatingPointRange<Float>,
+    scale: Float,
     enabled: Boolean,
-    onValueChange: (Float) -> Unit
+    onTopChange: (Float) -> Unit,
+    onBottomChange: (Float) -> Unit
 ) {
-    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f)) }
-    val draggableState = rememberDraggableState { delta ->
+    val density = LocalDensity.current
+    val handleHeight = 32.dp
+    val topLimit = with(density) { (topRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
+    val bottomLimit = with(density) { (bottomRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
+    val centerY = bottomLimit + handleHeight / 2
+    val containerHeight = bottomLimit + topLimit + handleHeight
+
+    val topOffset = with(density) { (topValue / scale).toDp() }.coerceIn(0.dp, topLimit)
+    val bottomOffset = with(density) { (bottomValue / scale).toDp() }.coerceIn(0.dp, bottomLimit)
+
+    val lineColor = MaterialTheme.colorScheme.tertiary
+
+    val topDragState = rememberDraggableState { delta ->
         if (!enabled) return@rememberDraggableState
-        val updated = (value + delta).coerceIn(valueRange.start, valueRange.endInclusive)
-        onValueChange(updated)
+        val updated = (topValue + delta * scale).coerceIn(topRange.start, topRange.endInclusive)
+        onTopChange(updated)
+    }
+    val bottomDragState = rememberDraggableState { delta ->
+        if (!enabled) return@rememberDraggableState
+        val updated = (bottomValue - delta * scale).coerceIn(bottomRange.start, bottomRange.endInclusive)
+        onBottomChange(updated)
     }
 
-    val valueRangeLength = (valueRange.endInclusive - valueRange.start).takeIf { it != 0f } ?: 1f
-    val clampedValue = value.coerceIn(valueRange.start, valueRange.endInclusive)
-    val progress = ((clampedValue - valueRange.start) / valueRangeLength).coerceIn(0f, 1f)
-
-    BoxWithConstraints(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(containerHeight)
     ) {
-        val density = LocalDensity.current
-        val horizontalPadding = 12.dp
-        val sliderWidthPx = with(density) { (maxWidth - horizontalPadding * 2).toPx() }.coerceAtLeast(0f)
-        val handleOffsetPx = (sliderWidthPx * progress).roundToInt()
-
-        Box(
+        Canvas(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth()
-                .padding(horizontal = horizontalPadding)
+                .matchParentSize()
+                .padding(horizontal = 6.dp)
         ) {
-            Canvas(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(32.dp)
-            ) {
-                val centerY = size.height / 2f
-                drawLine(
-                    color = color,
-                    start = Offset(0f, centerY),
-                    end = Offset(size.width, centerY),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    pathEffect = dashEffect
-                )
-            }
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .offset { IntOffset(handleOffsetPx, 0) }
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
-                    )
-                    .draggable(
-                        orientation = Orientation.Horizontal,
-                        state = draggableState,
-                        enabled = enabled
-                    )
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "=",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            }
+            val center = with(density) { centerY.toPx() }
+            drawLine(
+                color = lineColor,
+                start = Offset(0f, center),
+                end = Offset(size.width, center),
+                strokeWidth = 4.dp.toPx(),
+                cap = StrokeCap.Round
+            )
         }
-        Text(
-            text = "$label: ${value.roundToInt()} px",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface,
+
+        SplitHandleBar(
+            direction = HandleDirection.Up,
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = horizontalPadding)
+                .fillMaxWidth()
+                .offset(y = centerY + topOffset - handleHeight / 2)
+                .draggable(
+                    orientation = Orientation.Vertical,
+                    state = topDragState,
+                    enabled = enabled
+                )
         )
+
+        SplitHandleBar(
+            direction = HandleDirection.Down,
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset(y = centerY - bottomOffset - handleHeight / 2)
+                .draggable(
+                    orientation = Orientation.Vertical,
+                    state = bottomDragState,
+                    enabled = enabled
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            Text(
+                text = "Atas: ${topValue.roundToInt()} px",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Bawah: ${bottomValue.roundToInt()} px",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(6.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
     }
 }
 
