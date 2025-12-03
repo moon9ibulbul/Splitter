@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
+import android.graphics.Rect
 import android.graphics.Color as AndroidColor
 import android.graphics.ImageDecoder
 import android.net.Uri
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -122,7 +124,8 @@ data class ImageMetadata(
     val height: Int,
     val overlaps: List<Int> = emptyList(),
     val seamPositions: List<Int> = emptyList(),
-    val sourceHeights: List<Int> = emptyList()
+    val sourceHeights: List<Int> = emptyList(),
+    val seamAdjustments: List<SeamAdjustment> = emptyList()
 )
 
 data class PreviewState(
@@ -138,7 +141,8 @@ data class StitchedSelection(
     val uris: List<Uri>,
     val overlaps: List<Int>,
     val seamPositions: List<Int>,
-    val sourceHeights: List<Int>
+    val sourceHeights: List<Int>,
+    val seamAdjustments: List<SeamAdjustment>
 )
 
 fun StitchedSelection.toMetadata(): ImageMetadata = ImageMetadata(
@@ -147,8 +151,13 @@ fun StitchedSelection.toMetadata(): ImageMetadata = ImageMetadata(
     height = bitmap.height,
     overlaps = overlaps,
     seamPositions = seamPositions,
-    sourceHeights = sourceHeights
+    sourceHeights = sourceHeights,
+    seamAdjustments = seamAdjustments
 )
+
+data class SeamAdjustment(val topTrim: Int, val bottomTrim: Int) {
+    val totalOverlap: Int get() = topTrim + bottomTrim
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -426,17 +435,23 @@ fun PreviewScreen(
     var topAnchor by remember { mutableStateOf(0f) }
     var bottomAnchor by remember { mutableStateOf(0f) }
     val cutPositions = remember(state.metadata, state.cutPositions) { mutableStateListOf<Float>().apply { addAll(state.cutPositions) } }
-    val seamOverlaps = remember(state.metadata) {
+    val seamAdjustments = remember(state.metadata) {
         val expected = (state.metadata.uris.size - 1).coerceAtLeast(0)
-        val existing = if (state.metadata.overlaps.isEmpty() && expected > 0) List(expected) { 0 } else state.metadata.overlaps
-        mutableStateListOf<Int>().apply {
+        val existing = when {
+            state.metadata.seamAdjustments.isNotEmpty() -> state.metadata.seamAdjustments
+            state.metadata.overlaps.isNotEmpty() || expected == 0 -> state.metadata.overlaps.map { overlap ->
+                SeamAdjustment(topTrim = overlap, bottomTrim = 0)
+            }
+            else -> List(expected) { SeamAdjustment(0, 0) }
+        }
+        mutableStateListOf<SeamAdjustment>().apply {
             addAll(existing.take(expected))
-            repeat((expected - existing.size).coerceAtLeast(0)) { add(0) }
+            repeat((expected - existing.size).coerceAtLeast(0)) { add(SeamAdjustment(0, 0)) }
         }
     }
 
-    fun applyOverlaps(updatedOverlaps: List<Int>, successMessage: String) {
-        if (updatedOverlaps.size != (state.metadata.uris.size - 1).coerceAtLeast(0)) {
+    fun applyOverlaps(updatedAdjustments: List<SeamAdjustment>, successMessage: String) {
+        if (updatedAdjustments.size != (state.metadata.uris.size - 1).coerceAtLeast(0)) {
             coroutineScope.launch {
                 snackbarHostState.showSnackbar("Jumlah titik sambungan tidak sesuai")
             }
@@ -450,7 +465,8 @@ fun PreviewScreen(
                         context = context,
                         uris = state.metadata.uris,
                         smart = false,
-                        customOverlaps = updatedOverlaps
+                        customOverlaps = updatedAdjustments.map { it.totalOverlap },
+                        customAdjustments = updatedAdjustments
                     )
                 }
             }
@@ -646,24 +662,27 @@ fun PreviewScreen(
                                 val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1) ?: 0
                                 val onStartEdit = {
                                     activeSeamIndex = index
-                                    val existingOverlap = seamOverlaps.getOrNull(index)?.toFloat() ?: 0f
-                                    val suggestedTop = (existingOverlap / 2f).coerceAtMost(topLimit.toFloat())
-                                    topAnchor = suggestedTop
-                                    bottomAnchor = (existingOverlap - suggestedTop).coerceIn(0f, bottomLimit.toFloat())
+                                    val existing = seamAdjustments.getOrNull(index)
+                                    val existingTop = existing?.topTrim?.toFloat() ?: 0f
+                                    val existingBottom = existing?.bottomTrim?.toFloat() ?: 0f
+                                    topAnchor = existingTop.coerceIn(0f, topLimit.toFloat())
+                                    bottomAnchor = existingBottom.coerceIn(0f, bottomLimit.toFloat())
                                 }
                                 val onRedo = {
-                                    val updated = seamOverlaps.toMutableList()
-                                    updated[index] = 0
-                                    seamOverlaps[index] = 0
+                                    val updated = seamAdjustments.toMutableList()
+                                    val reset = SeamAdjustment(0, 0)
+                                    updated[index] = reset
+                                    seamAdjustments[index] = reset
                                     applyOverlaps(updated, "Sambungan direset")
                                     activeSeamIndex = null
                                 }
                                 val onConfirm = {
-                                    val maxOverlap = minOf(topLimit, bottomLimit)
-                                    val overlapValue = (topAnchor + bottomAnchor).roundToInt().coerceIn(0, maxOverlap)
-                                    val updated = seamOverlaps.toMutableList()
-                                    updated[index] = overlapValue
-                                    seamOverlaps[index] = overlapValue
+                                    val confirmedTop = topAnchor.roundToInt().coerceIn(0, topLimit)
+                                    val confirmedBottom = bottomAnchor.roundToInt().coerceIn(0, bottomLimit)
+                                    val updated = seamAdjustments.toMutableList()
+                                    val confirmed = SeamAdjustment(confirmedTop, confirmedBottom)
+                                    updated[index] = confirmed
+                                    seamAdjustments[index] = confirmed
                                     applyOverlaps(updated, "Posisi sambungan diperbarui")
                                     activeSeamIndex = null
                                 }
@@ -716,13 +735,7 @@ fun PreviewScreen(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-            if (isEditingStitch) {
-                Text(
-                    text = "Gunakan ikon gunting di tiap sambungan untuk mengatur titik potong antar gambar.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            } else {
+            if (!isEditingStitch) {
                 Text(
                     text = "Geser garis untuk mengatur posisi potong. Total bagian: ${cutPositions.size + 1}",
                     style = MaterialTheme.typography.bodyMedium,
@@ -902,7 +915,8 @@ fun SeamMarker(
             Column(
                 modifier = Modifier
                     .width(actionPanelWidth)
-                    .fillMaxHeight()
+                    .wrapContentHeight()
+                    .align(Alignment.CenterVertically)
                     .clip(RoundedCornerShape(12.dp))
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
                     .padding(6.dp),
@@ -911,6 +925,38 @@ fun SeamMarker(
             ) {
                 if (isActive) {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        IconButton(
+                            onClick = onStartEdit,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentCut,
+                                contentDescription = "Edit titik sambungan",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onRedo,
+                            enabled = !isBusy,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            ),
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Redo,
+                                contentDescription = "Reset titik sambungan",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                         IconButton(
                             onClick = onConfirm,
                             enabled = !isBusy,
@@ -1070,7 +1116,8 @@ fun stitchSelectedImages(
     context: Context,
     uris: List<Uri>,
     smart: Boolean,
-    customOverlaps: List<Int>? = null
+    customOverlaps: List<Int>? = null,
+    customAdjustments: List<SeamAdjustment>? = null
 ): StitchedSelection {
     if (uris.isEmpty()) throw IllegalArgumentException("Tidak ada gambar yang dipilih")
     val bitmaps = uris.map { uri -> decodeBitmapSoft(context, uri) }
@@ -1079,7 +1126,15 @@ fun stitchSelectedImages(
     } else {
         List(bitmaps.size - 1) { 0 }
     }
-    return buildStitchedSelection(bitmaps, uris, overlaps)
+    val adjustments = when {
+        customAdjustments != null -> {
+            if (customAdjustments.size != overlaps.size) throw IllegalArgumentException("Jumlah sambungan tidak sesuai")
+            customAdjustments
+        }
+        overlaps.isNotEmpty() -> overlaps.map { SeamAdjustment(it, 0) }
+        else -> emptyList()
+    }
+    return buildStitchedSelection(bitmaps, uris, overlaps, adjustments)
 }
 
 fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
@@ -1090,29 +1145,54 @@ fun decodeBitmapSoft(context: Context, uri: Uri): Bitmap {
     }
 }
 
-fun buildStitchedSelection(bitmaps: List<Bitmap>, uris: List<Uri>, overlaps: List<Int>): StitchedSelection {
+fun buildStitchedSelection(
+    bitmaps: List<Bitmap>,
+    uris: List<Uri>,
+    overlaps: List<Int>,
+    adjustments: List<SeamAdjustment> = emptyList()
+): StitchedSelection {
     require(bitmaps.isNotEmpty()) { "Bitmap list tidak boleh kosong" }
-    if (bitmaps.size == 1) return StitchedSelection(bitmaps.first(), uris, emptyList(), emptyList(), listOf(bitmaps.first().height))
+    if (bitmaps.size == 1) return StitchedSelection(bitmaps.first(), uris, emptyList(), emptyList(), listOf(bitmaps.first().height), emptyList())
     require(overlaps.size == bitmaps.size - 1) { "Jumlah overlap tidak sesuai" }
 
-    val seamPositions = mutableListOf<Int>()
-    var totalHeight = bitmaps.first().height
-    for (index in 1 until bitmaps.size) {
-        totalHeight += bitmaps[index].height - overlaps[index - 1]
+    val normalizedAdjustments = if (adjustments.isNotEmpty()) {
+        require(adjustments.size == overlaps.size) { "Jumlah pengaturan sambungan tidak sesuai" }
+        adjustments
+    } else {
+        overlaps.map { SeamAdjustment(it, 0) }
     }
+
+    val seamPositions = mutableListOf<Int>()
+    val sourceHeights = bitmaps.map { it.height }
+    val trimmedHeights = bitmaps.mapIndexed { index, bitmap ->
+        val topTrim = normalizedAdjustments.getOrNull(index - 1)?.bottomTrim ?: 0
+        val bottomTrim = normalizedAdjustments.getOrNull(index)?.topTrim ?: 0
+        (bitmap.height - topTrim - bottomTrim).coerceAtLeast(0)
+    }
+
+    val totalHeight = trimmedHeights.sum()
     val maxWidth = bitmaps.maxOf { it.width }
     val result = Bitmap.createBitmap(maxWidth, totalHeight, Bitmap.Config.ARGB_8888)
     val canvas = AndroidCanvas(result)
 
     var yOffset = 0
-    canvas.drawBitmap(bitmaps.first(), 0f, yOffset.toFloat(), null)
-    for (index in 1 until bitmaps.size) {
-        yOffset += bitmaps[index - 1].height - overlaps[index - 1]
-        seamPositions.add(yOffset)
-        canvas.drawBitmap(bitmaps[index], 0f, yOffset.toFloat(), null)
+    bitmaps.forEachIndexed { index, bitmap ->
+        val topTrim = normalizedAdjustments.getOrNull(index - 1)?.bottomTrim ?: 0
+        val bottomTrim = normalizedAdjustments.getOrNull(index)?.topTrim ?: 0
+        val sourceHeight = trimmedHeights[index]
+        if (sourceHeight <= 0) return@forEachIndexed
+
+        val srcRect = Rect(0, topTrim, bitmap.width, topTrim + sourceHeight)
+        val dstRect = Rect(0, yOffset, bitmap.width, yOffset + sourceHeight)
+        canvas.drawBitmap(bitmap, srcRect, dstRect, null)
+
+        yOffset += sourceHeight
+        if (index < bitmaps.lastIndex) {
+            seamPositions.add(yOffset)
+        }
     }
-    val sourceHeights = bitmaps.map { it.height }
-    return StitchedSelection(result, uris, overlaps, seamPositions, sourceHeights)
+
+    return StitchedSelection(result, uris, overlaps, seamPositions, sourceHeights, normalizedAdjustments)
 }
 
 fun smartStitchPlan(bitmaps: List<Bitmap>): List<Int> {
