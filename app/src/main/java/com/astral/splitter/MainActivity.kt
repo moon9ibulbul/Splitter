@@ -74,6 +74,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.alpha
@@ -859,21 +860,39 @@ fun SeamMarker(
         modifier = Modifier
             .fillMaxWidth()
             .offset(y = position - 56.dp)
-            .height(120.dp)
+            .height(168.dp)
     ) {
-        Divider(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .fillMaxWidth(),
-            thickness = 3.dp,
-            color = MaterialTheme.colorScheme.tertiary
-        )
-        Column(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            if (isActive) {
+        if (isActive) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth()
+                    .padding(end = 96.dp),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                SeamHandleSegment(
+                    label = "Atas",
+                    value = topValue,
+                    valueRange = topRange,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    enabled = !isBusy,
+                    onValueChange = onTopChange
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                SeamHandleSegment(
+                    label = "Bawah",
+                    value = bottomValue,
+                    valueRange = bottomRange,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    enabled = !isBusy,
+                    onValueChange = onBottomChange
+                )
+            }
+            Column(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     IconButton(onClick = onConfirm, enabled = !isBusy) {
                         Icon(imageVector = Icons.Filled.Check, contentDescription = "Simpan titik sambungan")
@@ -882,37 +901,102 @@ fun SeamMarker(
                         Icon(imageVector = Icons.Filled.Close, contentDescription = "Batalkan editing")
                     }
                 }
-                Slider(
-                    value = topValue,
-                    onValueChange = onTopChange,
-                    valueRange = topRange,
-                    enabled = !isBusy,
-                    modifier = Modifier
-                        .height(42.dp)
-                        .width(180.dp)
-                        .rotate(-90f)
+                Text(
+                    text = "Seret garis atas/bawah untuk geser sambungan",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 8.dp)
                 )
-                Slider(
-                    value = bottomValue,
-                    onValueChange = onBottomChange,
-                    valueRange = bottomRange,
-                    enabled = !isBusy,
-                    modifier = Modifier
-                        .height(42.dp)
-                        .width(180.dp)
-                        .rotate(-90f)
-                )
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    IconButton(onClick = onStartEdit, enabled = !isBusy) {
-                        Icon(imageVector = Icons.Filled.ContentCut, contentDescription = "Edit titik sambungan")
-                    }
-                    IconButton(onClick = onRedo, enabled = !isBusy) {
-                        Icon(imageVector = Icons.Filled.Redo, contentDescription = "Reset titik sambungan")
-                    }
+            }
+        } else {
+            Divider(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth(),
+                thickness = 3.dp,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                IconButton(onClick = onStartEdit, enabled = !isBusy) {
+                    Icon(imageVector = Icons.Filled.ContentCut, contentDescription = "Edit titik sambungan")
+                }
+                IconButton(onClick = onRedo, enabled = !isBusy) {
+                    Icon(imageVector = Icons.Filled.Redo, contentDescription = "Reset titik sambungan")
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SeamHandleSegment(
+    label: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    color: Color,
+    enabled: Boolean,
+    onValueChange: (Float) -> Unit
+) {
+    val dashEffect = remember { PathEffect.dashPathEffect(floatArrayOf(18f, 14f)) }
+    val draggableState = rememberDraggableState { delta ->
+        if (!enabled) return@rememberDraggableState
+        val updated = (value + delta).coerceIn(valueRange.start, valueRange.endInclusive)
+        onValueChange(updated)
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp)
+    ) {
+        Canvas(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .height(32.dp)
+        ) {
+            val centerY = size.height / 2f
+            drawLine(
+                color = color,
+                start = Offset(0f, centerY),
+                end = Offset(size.width, centerY),
+                strokeWidth = 4.dp.toPx(),
+                cap = StrokeCap.Round,
+                pathEffect = dashEffect
+            )
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                )
+                .draggable(
+                    orientation = Orientation.Vertical,
+                    state = draggableState,
+                    enabled = enabled
+                )
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "=",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+        }
+        Text(
+            text = "$label: ${value.roundToInt()} px",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 8.dp)
+        )
     }
 }
 
