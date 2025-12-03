@@ -74,6 +74,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.alpha
@@ -575,7 +576,7 @@ fun PreviewScreen(
             }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val density = LocalDensity.current
-                val displayWidth = maxWidth * 0.85f
+                val displayWidth = maxWidth * 0.8f
                 val displayHeight = if (imageBitmap.width > 0) {
                     displayWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
                 } else {
@@ -608,7 +609,7 @@ fun PreviewScreen(
                         .fillMaxWidth()
                         .height(displayHeight)
                         .background(Color.Black)
-                        .padding(end = 12.dp)
+                        .padding(end = 24.dp)
                 ) {
                     if (pieceHeights.isNotEmpty()) {
                         Text(
@@ -633,73 +634,73 @@ fun PreviewScreen(
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier.fillMaxSize()
                         )
-                    }
-                    if (isEditingStitch) {
-                        seamPositions.forEachIndexed { index, seamStart ->
-                            val displayOffset = seamStart / scale
-                            val yOffset = with(density) { displayOffset.toDp() }
-                            val topLimit = state.metadata.sourceHeights.getOrNull(index)?.coerceAtMost(2000) ?: 0
-                            val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1)?.coerceAtMost(2000) ?: 0
-                            val onStartEdit = {
-                                activeSeamIndex = index
-                                topAnchor = 0f
-                                bottomAnchor = 0f
-                            }
-                            val onRedo = {
-                                val updated = seamOverlaps.toMutableList()
-                                updated[index] = 0
-                                seamOverlaps[index] = 0
-                                applyOverlaps(updated, "Sambungan direset")
-                                activeSeamIndex = null
-                            }
-                            val onConfirm = {
-                                val maxOverlap = minOf(topLimit, bottomLimit)
-                                val overlapValue = (topAnchor + bottomAnchor).roundToInt().coerceIn(0, maxOverlap)
-                                val updated = seamOverlaps.toMutableList()
-                                updated[index] = overlapValue
-                                seamOverlaps[index] = overlapValue
-                                applyOverlaps(updated, "Posisi sambungan diperbarui")
-                                activeSeamIndex = null
-                            }
-                            SeamMarker(
-                                position = yOffset,
-                                isActive = activeSeamIndex == index,
-                                topValue = topAnchor.coerceAtMost(topLimit.toFloat()),
-                                bottomValue = bottomAnchor.coerceAtMost(bottomLimit.toFloat()),
-                                topRange = 0f..topLimit.toFloat(),
-                                bottomRange = 0f..bottomLimit.toFloat(),
-                                scale = scale,
-                                isBusy = isRestitching || isSmartProcessing || isSaving,
-                                onStartEdit = onStartEdit,
-                                onRedo = onRedo,
-                                onCancel = {
-                                    activeSeamIndex = null
+                        if (isEditingStitch) {
+                            seamPositions.forEachIndexed { index, seamStart ->
+                                val displayOffset = seamStart / scale
+                                val yOffset = with(density) { displayOffset.toDp() }
+                                val topLimit = state.metadata.sourceHeights.getOrNull(index)?.coerceAtMost(2000) ?: 0
+                                val bottomLimit = state.metadata.sourceHeights.getOrNull(index + 1)?.coerceAtMost(2000) ?: 0
+                                val onStartEdit = {
+                                    activeSeamIndex = index
                                     topAnchor = 0f
                                     bottomAnchor = 0f
-                                },
-                                onConfirm = onConfirm,
-                                onTopChange = { topAnchor = it },
-                                onBottomChange = { bottomAnchor = it }
-                            )
-                        }
-                    } else {
-                        cutPositions.forEachIndexed { index, positionPx ->
-                            val displayOffset = positionPx / scale
-                            val yOffset = with(density) { displayOffset.toDp() }
-                            val topLabel = "${sliderTopHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
-                            val bottomLabel = "${sliderBottomHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
-                            SliderOverlay(
-                                position = yOffset,
-                                topLabel = topLabel,
-                                bottomLabel = bottomLabel,
-                                onDrag = { deltaPx ->
-                                    val imageDelta = deltaPx * scale
-                                    val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
-                                    val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
-                                    val updated = (positionPx + imageDelta).coerceIn(previous, next)
-                                    cutPositions[index] = updated
                                 }
-                            )
+                                val onRedo = {
+                                    val updated = seamOverlaps.toMutableList()
+                                    updated[index] = 0
+                                    seamOverlaps[index] = 0
+                                    applyOverlaps(updated, "Sambungan direset")
+                                    activeSeamIndex = null
+                                }
+                                val onConfirm = {
+                                    val maxOverlap = minOf(topLimit, bottomLimit)
+                                    val overlapValue = (topAnchor + bottomAnchor).roundToInt().coerceIn(0, maxOverlap)
+                                    val updated = seamOverlaps.toMutableList()
+                                    updated[index] = overlapValue
+                                    seamOverlaps[index] = overlapValue
+                                    applyOverlaps(updated, "Posisi sambungan diperbarui")
+                                    activeSeamIndex = null
+                                }
+                                SeamMarker(
+                                    position = yOffset,
+                                    isActive = activeSeamIndex == index,
+                                    topValue = topAnchor.coerceAtMost(topLimit.toFloat()),
+                                    bottomValue = bottomAnchor.coerceAtMost(bottomLimit.toFloat()),
+                                    topRange = 0f..topLimit.toFloat(),
+                                    bottomRange = 0f..bottomLimit.toFloat(),
+                                    scale = scale,
+                                    isBusy = isRestitching || isSmartProcessing || isSaving,
+                                    onStartEdit = onStartEdit,
+                                    onRedo = onRedo,
+                                    onCancel = {
+                                        activeSeamIndex = null
+                                        topAnchor = 0f
+                                        bottomAnchor = 0f
+                                    },
+                                    onConfirm = onConfirm,
+                                    onTopChange = { topAnchor = it },
+                                    onBottomChange = { bottomAnchor = it }
+                                )
+                            }
+                        } else {
+                            cutPositions.forEachIndexed { index, positionPx ->
+                                val displayOffset = positionPx / scale
+                                val yOffset = with(density) { displayOffset.toDp() }
+                                val topLabel = "${sliderTopHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                                val bottomLabel = "${sliderBottomHeights.getOrNull(index)?.toInt()?.coerceAtLeast(1) ?: 0} px"
+                                SliderOverlay(
+                                    position = yOffset,
+                                    topLabel = topLabel,
+                                    bottomLabel = bottomLabel,
+                                    onDrag = { deltaPx ->
+                                        val imageDelta = deltaPx * scale
+                                        val previous = if (index == 0) 0f else cutPositions[index - 1] + 4f
+                                        val next = if (index == cutPositions.lastIndex) imageBitmap.height.toFloat() else cutPositions[index + 1] - 4f
+                                        val updated = (positionPx + imageDelta).coerceIn(previous, next)
+                                        cutPositions[index] = updated
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -855,11 +856,18 @@ fun SeamMarker(
     onTopChange: (Float) -> Unit,
     onBottomChange: (Float) -> Unit
 ) {
+    val density = LocalDensity.current
+    val handleHeight = 32.dp
+    val topLimit = with(density) { (topRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
+    val bottomLimit = with(density) { (bottomRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
+    val centerY = bottomLimit + handleHeight / 2
+    val sliderHeight = bottomLimit + topLimit + handleHeight
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = position - 56.dp)
-            .height(200.dp)
+            .offset(y = position - centerY)
+            .height(sliderHeight)
     ) {
         if (isActive) {
             Row(modifier = Modifier.fillMaxWidth()) {
@@ -875,6 +883,8 @@ fun SeamMarker(
                         bottomRange = bottomRange,
                         scale = scale,
                         enabled = !isBusy,
+                        topLimit = topLimit,
+                        bottomLimit = bottomLimit,
                         onTopChange = onTopChange,
                         onBottomChange = onBottomChange
                     )
@@ -902,12 +912,6 @@ fun SeamMarker(
                             )
                         }
                     }
-                    Text(
-                        text = "Seret handle atas/bawah untuk geser sambungan",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)
-                    )
                 }
             }
         } else {
@@ -941,13 +945,13 @@ private fun ManualSeamSlider(
     bottomRange: ClosedFloatingPointRange<Float>,
     scale: Float,
     enabled: Boolean,
+    topLimit: Dp,
+    bottomLimit: Dp,
     onTopChange: (Float) -> Unit,
     onBottomChange: (Float) -> Unit
 ) {
     val density = LocalDensity.current
     val handleHeight = 32.dp
-    val topLimit = with(density) { (topRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
-    val bottomLimit = with(density) { (bottomRange.endInclusive / scale).toDp() }.coerceAtLeast(12.dp)
     val centerY = bottomLimit + handleHeight / 2
     val containerHeight = bottomLimit + topLimit + handleHeight
 
@@ -958,12 +962,12 @@ private fun ManualSeamSlider(
 
     val topDragState = rememberDraggableState { delta ->
         if (!enabled) return@rememberDraggableState
-        val updated = (topValue + delta * scale).coerceIn(topRange.start, topRange.endInclusive)
+        val updated = (topValue - delta * scale).coerceIn(topRange.start, topRange.endInclusive)
         onTopChange(updated)
     }
     val bottomDragState = rememberDraggableState { delta ->
         if (!enabled) return@rememberDraggableState
-        val updated = (bottomValue - delta * scale).coerceIn(bottomRange.start, bottomRange.endInclusive)
+        val updated = (bottomValue + delta * scale).coerceIn(bottomRange.start, bottomRange.endInclusive)
         onBottomChange(updated)
     }
 
@@ -983,7 +987,8 @@ private fun ManualSeamSlider(
                 start = Offset(0f, center),
                 end = Offset(size.width, center),
                 strokeWidth = 4.dp.toPx(),
-                cap = StrokeCap.Round
+                cap = StrokeCap.Round,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f))
             )
         }
 
@@ -991,7 +996,7 @@ private fun ManualSeamSlider(
             direction = HandleDirection.Up,
             modifier = Modifier
                 .fillMaxWidth()
-                .offset(y = centerY + topOffset - handleHeight / 2)
+                .offset(y = centerY - topOffset - handleHeight / 2)
                 .draggable(
                     orientation = Orientation.Vertical,
                     state = topDragState,
@@ -1003,44 +1008,13 @@ private fun ManualSeamSlider(
             direction = HandleDirection.Down,
             modifier = Modifier
                 .fillMaxWidth()
-                .offset(y = centerY - bottomOffset - handleHeight / 2)
+                .offset(y = centerY + bottomOffset - handleHeight / 2)
                 .draggable(
                     orientation = Orientation.Vertical,
                     state = bottomDragState,
                     enabled = enabled
                 )
         )
-
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 8.dp),
-            horizontalAlignment = Alignment.End
-        ) {
-            Text(
-                text = "Atas: ${topValue.roundToInt()} px",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Bawah: ${bottomValue.roundToInt()} px",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(6.dp)
-                    )
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-            )
-        }
     }
 }
 
