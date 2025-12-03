@@ -576,7 +576,8 @@ fun PreviewScreen(
             }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val density = LocalDensity.current
-                val displayWidth = maxWidth * 0.8f
+                val constraintsMaxWidth = maxWidth
+                val displayWidth = constraintsMaxWidth * 0.8f
                 val displayHeight = if (imageBitmap.width > 0) {
                     displayWidth * imageBitmap.height.toFloat() / imageBitmap.width.toFloat()
                 } else {
@@ -673,7 +674,7 @@ fun PreviewScreen(
                                     scale = scale,
                                     isBusy = isRestitching || isSmartProcessing || isSaving,
                                     sliderWidth = displayWidth,
-                                    sideSpace = (maxWidth - displayWidth).coerceAtLeast(0.dp),
+                                    sideSpace = (constraintsMaxWidth - displayWidth).coerceAtLeast(0.dp),
                                     onStartEdit = onStartEdit,
                                     onRedo = onRedo,
                                     onCancel = {
