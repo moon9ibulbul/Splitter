@@ -728,26 +728,22 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = position - 64.dp)
-            .height(128.dp)
+            .offset(y = position - 48.dp)
+            .height(96.dp)
             .draggable(
                 orientation = Orientation.Vertical,
                 state = rememberDraggableState { delta -> onDrag(delta) }
             )
     ) {
-        Column(
+        Divider(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
-        ) {
-            SplitHandleBar(direction = HandleDirection.Up)
-            SplitHandleBar(direction = HandleDirection.Down)
-        }
+            thickness = 3.dp,
+            color = MaterialTheme.colorScheme.secondary
+        )
         Column(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 4.dp),
+            modifier = Modifier.align(Alignment.CenterEnd),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -763,20 +759,17 @@ fun SliderOverlay(position: Dp, topLabel: String, bottomLabel: String, onDrag: (
             )
             Box(
                 modifier = Modifier
-                    .padding(top = 8.dp)
-                    .size(width = 44.dp, height = 40.dp)
-                    .background(
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
+                    .padding(top = 6.dp)
+                    .size(36.dp)
+                    .border(2.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), MaterialTheme.shapes.small)
             )
             Text(
                 text = bottomLabel,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
-                    .padding(top = 8.dp)
+                    .padding(top = 6.dp)
                     .background(
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(6.dp)
